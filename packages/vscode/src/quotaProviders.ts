@@ -11,6 +11,11 @@ import { fetchOllamaUsage } from './ollamaQuota';
 type AuthEntry = Record<string, unknown> | string;
 type AuthFile = Record<string, AuthEntry>;
 
+type UsageWindowGiftReset = {
+  recordId: number;
+  expireAt: number;
+};
+
 type UsageWindow = {
   usedPercent: number | null;
   remainingPercent: number | null;
@@ -20,6 +25,7 @@ type UsageWindow = {
   resetAtFormatted: string | null;
   resetAfterFormatted: string | null;
   valueLabel?: string | null;
+  giftReset?: UsageWindowGiftReset | null;
 };
 
 type ProviderUsage = {
@@ -100,6 +106,24 @@ type ZaiPayload = {
     limits?: ZaiLimit[];
     level?: string;
   };
+};
+
+type ZaiGiftResetRecord = {
+  recordId?: number;
+  expireTime?: string;
+  available?: boolean;
+};
+
+type ZaiGiftResetPayload = {
+  data?: {
+    fiveHourResets?: ZaiGiftResetRecord[];
+    weekResets?: ZaiGiftResetRecord[];
+  };
+};
+
+type ZaiGiftResetUsePayload = {
+  msg?: string;
+  success?: boolean;
 };
 
 type ZhipuaiTokensLimit = {
@@ -2138,9 +2162,81 @@ const resolveWindowLabel = (windowSeconds: number | null) => {
   return `${windowSeconds}s`;
 };
 
+// Gift reset timestamps come as 'YYYY-MM-DD HH:mm:ss' in UTC+8.
+const ZAI_RESET_TIME_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+const ZAI_ALIASES = ['zai-coding-plan', 'zai', 'z.ai'];
+
+const parseZaiResetExpire = (value: string | undefined): number | null => {
+  if (value === undefined || !ZAI_RESET_TIME_PATTERN.test(value)) return null;
+  const timestamp = Date.parse(`${value.replace(' ', 'T')}+08:00`);
+  return Number.isNaN(timestamp) ? null : timestamp;
+};
+
+// Keep only resets with a parseable time.
+// The nearest live expiry is the one worth activating first. z.ai flips
+// `available` to false once a record expires, so while no live resets remain
+// the fallback shows the most recently expired record regardless of its
+// availability — temporary, to keep the reset button testable.
+const pickZaiGiftReset = (records: ZaiGiftResetRecord[] | undefined): UsageWindowGiftReset | null => {
+  if (!Array.isArray(records)) return null;
+  const now = Date.now();
+  let best: UsageWindowGiftReset | null = null;
+  let fallback: UsageWindowGiftReset | null = null;
+  for (const record of records) {
+    if (!record || record.recordId === undefined) continue;
+    const expireAt = parseZaiResetExpire(record.expireTime);
+    if (expireAt === null) continue;
+    if (expireAt > now) {
+      if (record.available !== true) continue;
+      if (best === null || expireAt < best.expireAt) {
+        best = { recordId: record.recordId, expireAt };
+      }
+    } else if (fallback === null || expireAt > fallback.expireAt) {
+      fallback = { recordId: record.recordId, expireAt };
+    }
+  }
+  return best ?? fallback;
+};
+
+const ZAI_GIFT_RESET_URL = 'https://api.z.ai/api/biz/customer-package-reset/list?targetType=PERSONAL';
+const ZAI_FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
+const ZAI_WEEK_WINDOW_SECONDS = 7 * 24 * 60 * 60;
+
+// Supplementary call: gift reset info must never fail the quota result.
+const attachZaiGiftResets = async (windows: Record<string, UsageWindow>, apiKey: string): Promise<void> => {
+  try {
+    const response = await fetch(ZAI_GIFT_RESET_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) return;
+    // SAFETY: response.json() is untyped; only the two record arrays are consumed,
+    // and every field they carry is re-checked by pickZaiGiftReset before use.
+    const payload = await response.json() as ZaiGiftResetPayload;
+    const data = payload?.data;
+    if (!data) return;
+
+    const fiveHour = pickZaiGiftReset(data.fiveHourResets);
+    const weekly = pickZaiGiftReset(data.weekResets);
+
+    for (const window of Object.values(windows)) {
+      if (window.windowSeconds === ZAI_FIVE_HOUR_WINDOW_SECONDS && fiveHour) {
+        window.giftReset = fiveHour;
+      } else if (window.windowSeconds === ZAI_WEEK_WINDOW_SECONDS && weekly) {
+        window.giftReset = weekly;
+      }
+    }
+  } catch {
+    // Gift resets are optional metadata; ignore failures.
+  }
+};
+
 const fetchZaiQuota = async (): Promise<ProviderResult> => {
   const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, ['zai-coding-plan', 'zai', 'z.ai'])) as Record<string, unknown> | null;
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ZAI_ALIASES)) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
   if (!apiKey) {
@@ -2200,6 +2296,8 @@ const fetchZaiQuota = async (): Promise<ProviderResult> => {
       });
     }
 
+    await attachZaiGiftResets(windows, apiKey);
+
     return buildResult({
       providerId: 'zai-coding-plan',
       providerName: 'z.ai',
@@ -2217,6 +2315,59 @@ const fetchZaiQuota = async (): Promise<ProviderResult> => {
       error: error instanceof Error ? error.message : 'Request failed',
     });
   }
+};
+
+const ZAI_GIFT_RESET_USE_URL = 'https://api.z.ai/api/biz/customer-package-reset/use';
+const ZAI_GIFT_RESET_TYPES = ['FIVE_HOUR', 'WEEK'] as const;
+
+export type QuotaGiftResetType = (typeof ZAI_GIFT_RESET_TYPES)[number];
+
+const activateZaiGiftReset = async (input: { recordId: number; resetType: QuotaGiftResetType }): Promise<void> => {
+  const auth = readAuthFile();
+  // SAFETY: auth.json is untyped storage; the cast only reads the optional
+  // key/token fields and no other shape is consumed.
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ZAI_ALIASES)) as { key?: unknown; token?: unknown } | null;
+  // SAFETY: a non-string key/token becomes an unusable bearer that the
+  // !apiKey check rejects before any request leaves the host.
+  const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
+
+  if (!apiKey) {
+    throw new Error('Not configured');
+  }
+  if (!Number.isFinite(input.recordId) || !ZAI_GIFT_RESET_TYPES.includes(input.resetType)) {
+    throw new Error('Invalid gift reset request');
+  }
+
+  const response = await fetch(ZAI_GIFT_RESET_USE_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      targetType: 'PERSONAL',
+      resetType: input.resetType,
+      recordId: input.recordId,
+      requestId: crypto.randomUUID(),
+    }),
+  });
+
+  // SAFETY: response.json() is untyped; only success/msg are consumed and both
+  // are re-checked before use.
+  const payload = await response.json().catch(() => null) as ZaiGiftResetUsePayload | null;
+  if (!response.ok || payload?.success !== true) {
+    throw new Error(payload?.msg || `API error: ${response.status}`);
+  }
+};
+
+export const activateQuotaGiftReset = async (
+  providerId: string,
+  input: { recordId: number; resetType: QuotaGiftResetType },
+): Promise<void> => {
+  if (!ZAI_ALIASES.includes(providerId)) {
+    throw new Error('Unsupported provider');
+  }
+  await activateZaiGiftReset(input);
 };
 
 const fetchZhipuaiCodingPlanQuota = async (): Promise<ProviderResult> => {
