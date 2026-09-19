@@ -121,6 +121,13 @@ describe('splitSentencesForTTS', () => {
     expect(chunks.length).toBe(3);
     expect(chunks[2]).toBe('The third sentence verifies that chunk ordering stays stable end to end. That is all.');
   });
+
+  test('falls back to regex splitting when Intl.Segmenter is unavailable', () => {
+    const chunks = withoutIntlSegmenter(() => splitSentencesForTTS(longPlainSentences));
+
+    expect(chunks.length).toBe(4);
+    expect(collapseWhitespace(chunks.join(' '))).toBe(collapseWhitespace(longPlainSentences));
+  });
 });
 
 interface FakeAudioBuffer {
@@ -160,6 +167,24 @@ function abortError(): Error {
   const error = new Error('aborted');
   error.name = 'AbortError';
   return error;
+}
+
+function withoutIntlSegmenter<T>(fn: () => T): T {
+  const descriptor = Reflect.getOwnPropertyDescriptor(globalThis.Intl, 'Segmenter');
+  Object.defineProperty(globalThis.Intl, 'Segmenter', {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return fn();
+  } finally {
+    Object.defineProperty(globalThis.Intl, 'Segmenter', {
+      value: descriptor?.value,
+      configurable: true,
+      writable: true,
+    });
+  }
 }
 
 function createPlaybackHarness(chunks: readonly string[]) {

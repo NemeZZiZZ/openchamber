@@ -145,8 +145,14 @@ function segmentSentences(text: string): string[] {
       (segment) => segment.segment,
     );
   }
-  // Fallback for browsers without Intl.Segmenter.
-  return text.split(/(?<=[.!?…])\s+/);
+  // Fallback for browsers without Intl.Segmenter. Built via new RegExp inside
+  // try/catch because a lookbehind literal is a parse-time SyntaxError on WebKit
+  // without lookbehind support (Safari < 16.4) and would break the whole bundle.
+  try {
+    return text.split(new RegExp('(?<=[.!?…])\\s+'));
+  } catch {
+    return [text];
+  }
 }
 
 /**
