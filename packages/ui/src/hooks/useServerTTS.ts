@@ -274,6 +274,112 @@ function scheduleAudioChunk(
   };
 }
 
+/** Outcome of the chunked synthesis loop. */
+export type ChunkedPlaybackResult =
+  | { status: 'completed'; scheduled: number }
+  | { status: 'aborted'; scheduled: number }
+  | { status: 'all-failed' };
+
+/**
+ * Synthesize and schedule sentence chunks in order: each chunk is fetched,
+ * scheduled for playback as soon as it is decoded, and the next chunk is
+ * fetched while the current one plays. Completion is reported through
+ * onAllEnded once every scheduled chunk has ended (or earlier chunks ended
+ * and every remaining fetch failed). Test hooks are injected as deps so the
+ * scheduling and failure behavior is unit-testable without Web Audio.
+ */
+export async function runChunkedTTSPlayback<TBuffer, TSource>(
+  chunks: readonly string[],
+  deps: {
+    signal: AbortSignal;
+    fetchChunk: (chunk: string) => Promise<TBuffer>;
+    scheduleChunk: (
+      audioBuffer: TBuffer,
+      startAt: number,
+    ) => { source: TSource; endsAt: number };
+    currentTime: () => number;
+    attachOnEnded: (source: TSource, handler: () => void) => void;
+    onScheduled: (source: TSource) => void;
+    onFirstScheduled: () => void;
+    onAllEnded: () => void;
+  },
+): Promise<ChunkedPlaybackResult> {
+  let scheduled = 0;
+  let ended = 0;
+  let fetchLoopDone = false;
+  let finished = false;
+  let nextStartTime = 0;
+
+  // Completion is re-checked both when a chunk ends and when the fetch loop
+  // finishes: the last scheduled chunk may already have ended while later
+  // fetches were still in flight (and then failed).
+  const maybeFinish = () => {
+    if (
+      fetchLoopDone &&
+      !finished &&
+      scheduled > 0 &&
+      ended >= scheduled &&
+      !deps.signal.aborted
+    ) {
+      finished = true;
+      deps.onAllEnded();
+    }
+  };
+
+  for (const chunk of chunks) {
+    if (deps.signal.aborted) {
+      break;
+    }
+
+    let audioBuffer: TBuffer;
+    try {
+      audioBuffer = await deps.fetchChunk(chunk);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        break;
+      }
+      // One failed sentence must not break the queue: skip it and continue.
+      console.warn(
+        '[useServerTTS] Skipping failed sentence chunk:',
+        chunk,
+        err,
+      );
+      continue;
+    }
+    if (deps.signal.aborted) {
+      break;
+    }
+
+    const { source, endsAt } = deps.scheduleChunk(
+      audioBuffer,
+      Math.max(deps.currentTime(), nextStartTime),
+    );
+    nextStartTime = endsAt;
+    deps.onScheduled(source);
+    scheduled += 1;
+
+    if (scheduled === 1) {
+      deps.onFirstScheduled();
+    }
+
+    deps.attachOnEnded(source, () => {
+      ended += 1;
+      maybeFinish();
+    });
+  }
+
+  fetchLoopDone = true;
+  maybeFinish();
+
+  if (deps.signal.aborted) {
+    return { status: 'aborted', scheduled };
+  }
+  if (scheduled === 0) {
+    return { status: 'all-failed' };
+  }
+  return { status: 'completed', scheduled };
+}
+
 export function useServerTTS(
   options: UseServerTTSOptions = {},
 ): UseServerTTSReturn {
@@ -473,12 +579,7 @@ export function useServerTTS(
         const sources: AudioBufferSourceNode[] = [];
         audioSourcesRef.current = sources;
 
-        let scheduled = 0;
-        let ended = 0;
         let onEndSent = false;
-        let fetchLoopDone = false;
-        let nextStartTime = 0;
-
         const sendOnEnd = () => {
           if (!onEndSent) {
             onEndSent = true;
@@ -486,80 +587,43 @@ export function useServerTTS(
           }
         };
 
-        for (const chunk of chunks) {
-          if (controller.signal.aborted) {
-            break;
-          }
-
-          let audioBuffer: AudioBuffer;
-          try {
-            audioBuffer = await fetchTTSAudioChunk(
-              ctx,
-              chunk,
-              options,
-              config,
-              controller.signal,
-            );
-          } catch (err) {
-            if (err instanceof Error && err.name === 'AbortError') {
-              break;
-            }
-            // One failed sentence must not break the queue: skip it and continue.
-            console.warn(
-              '[useServerTTS] Skipping failed sentence chunk:',
-              chunk,
-              err,
-            );
-            continue;
-          }
-          if (controller.signal.aborted) {
-            break;
-          }
-
-          const { source, endsAt } = scheduleAudioChunk(
-            ctx,
-            audioBuffer,
-            options,
-            Math.max(ctx.currentTime, nextStartTime),
-          );
-          nextStartTime = endsAt;
-          sources.push(source);
-          scheduled += 1;
-
-          if (scheduled === 1) {
+        const result = await runChunkedTTSPlayback(chunks, {
+          signal: controller.signal,
+          fetchChunk: (chunk) =>
+            fetchTTSAudioChunk(ctx, chunk, options, config, controller.signal),
+          scheduleChunk: (audioBuffer, startAt) =>
+            scheduleAudioChunk(ctx, audioBuffer, options, startAt),
+          currentTime: () => ctx.currentTime,
+          attachOnEnded: (source, handler) => {
+            source.onended = handler;
+          },
+          onScheduled: (source) => {
+            sources.push(source);
+          },
+          onFirstScheduled: () => {
             console.log(
               '[useServerTTS] Starting chunked audio playback via Web Audio API...',
             );
             setIsPlaying(true);
             options?.onStart?.();
-          }
+          },
+          onAllEnded: () => {
+            console.log('[useServerTTS] Chunked playback finished');
+            setIsPlaying(false);
+            audioSourcesRef.current = [];
+            sendOnEnd();
+          },
+        });
 
-          source.onended = () => {
-            ended += 1;
-            if (
-              fetchLoopDone &&
-              ended >= scheduled &&
-              !controller.signal.aborted
-            ) {
-              console.log('[useServerTTS] Chunked playback finished');
-              setIsPlaying(false);
-              audioSourcesRef.current = [];
-              sendOnEnd();
-            }
-          };
-        }
-
-        fetchLoopDone = true;
-
-        if (controller.signal.aborted) {
+        if (result.status === 'aborted') {
           // Mirror the single-request path, where stopping playback fires onended -> onEnd.
-          if (scheduled > 0) {
+          if (result.scheduled > 0) {
             sendOnEnd();
           }
           return;
         }
 
-        if (scheduled === 0) {
+        if (result.status === 'all-failed') {
           // Every chunk failed: surface the error like the single-request path does.
           const errorMsg = 'Failed to speak: all sentence chunks failed';
           console.error('[useServerTTS] Error:', errorMsg);
