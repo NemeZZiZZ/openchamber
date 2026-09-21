@@ -158,7 +158,10 @@ function segmentSentences(text: string): string[] {
 /**
  * Split text into sentence-level TTS chunks. Short fragments left over after
  * abbreviation splits (т.д., т.е., initials) are merged with adjacent chunks so
- * every request carries a meaningful piece of speech.
+ * every request carries a meaningful piece of speech. Line breaks are hard
+ * boundaries: formatted replies keep headings and list items on their own
+ * lines, and a heading without terminal punctuation must never merge with the
+ * line below it.
  */
 export function splitSentencesForTTS(text: string): string[] {
   const trimmed = text.trim();
@@ -170,21 +173,29 @@ export function splitSentencesForTTS(text: string): string[] {
   }
 
   const chunks: string[] = [];
-  let pending = '';
-  for (const segment of segmentSentences(trimmed)) {
-    pending += segment;
-    if (pending.trim().length >= TTS_MIN_CHUNK_LENGTH) {
-      chunks.push(pending.trim());
-      pending = '';
+  for (const paragraph of trimmed.split(/\n+/)) {
+    const line = paragraph.trim();
+    if (!line) {
+      continue;
     }
-  }
-  const tail = pending.trim();
-  if (tail) {
-    if (tail.length < TTS_MIN_CHUNK_LENGTH && chunks.length > 0) {
-      chunks[chunks.length - 1] = `${chunks[chunks.length - 1]} ${tail}`;
-    } else {
-      chunks.push(tail);
+    const lineChunks: string[] = [];
+    let pending = '';
+    for (const segment of segmentSentences(line)) {
+      pending += segment;
+      if (pending.trim().length >= TTS_MIN_CHUNK_LENGTH) {
+        lineChunks.push(pending.trim());
+        pending = '';
+      }
     }
+    const tail = pending.trim();
+    if (tail) {
+      if (tail.length < TTS_MIN_CHUNK_LENGTH && lineChunks.length > 0) {
+        lineChunks[lineChunks.length - 1] = `${lineChunks[lineChunks.length - 1]} ${tail}`;
+      } else {
+        lineChunks.push(tail);
+      }
+    }
+    chunks.push(...lineChunks);
   }
   return chunks;
 }

@@ -18,6 +18,14 @@ const longPlainSentences = [
   'The fourth sentence closes the sample and stays above the fragment floor.',
 ].join(' ');
 
+/** Formatted reply shape: a heading without terminal punctuation, then body lines. */
+const formattedReplyText = [
+  'What is Qwen TTS in the cloud',
+  'The Qwen-Audio family runs on Alibaba Cloud Model Studio in the international region, plus the new qwencloud.com portal.',
+  'Russian is officially in the list of 16 languages including Arabic, Chinese, English, French, German и др. By their measurements it is the best WER/CER in 10 of 16 languages.',
+  'Free trial on Model Studio: 1M tokens per model for free.',
+].join('\n\n');
+
 describe('splitSentencesForTTS', () => {
   test('returns the trimmed text as a single chunk when it fits the fast path', () => {
     const text = 'Short text. With two sentences. Fast path.';
@@ -120,6 +128,37 @@ describe('splitSentencesForTTS', () => {
 
     expect(chunks.length).toBe(3);
     expect(chunks[2]).toBe('The third sentence verifies that chunk ordering stays stable end to end. That is all.');
+  });
+
+  test('keeps a heading line without terminal punctuation on its own chunk', () => {
+    expect(formattedReplyText.length).toBeGreaterThan(FAST_PATH_MAX_LENGTH);
+
+    const chunks = splitSentencesForTTS(formattedReplyText);
+
+    expect(chunks[0]).toBe('What is Qwen TTS in the cloud');
+    expect(chunks.filter((chunk) => chunk.includes('What is Qwen TTS'))).toHaveLength(1);
+  });
+
+  test('does not merge a short trailing line into the previous chunk', () => {
+    const text = [
+      'The first sentence is long enough to exceed the forty character threshold.',
+      'The second sentence describes the sentence-by-sentence speech pipeline.',
+      'The third sentence verifies that chunk ordering stays stable end to end.',
+      'That is all.',
+    ].join('\n');
+    expect(text.length).toBeGreaterThan(FAST_PATH_MAX_LENGTH);
+
+    const chunks = splitSentencesForTTS(text);
+
+    expect(chunks.length).toBe(4);
+    expect(chunks[3]).toBe('That is all.');
+  });
+
+  test('keeps line boundaries in the regex fallback path', () => {
+    const chunks = withoutIntlSegmenter(() => splitSentencesForTTS(formattedReplyText));
+
+    expect(chunks[0]).toBe('What is Qwen TTS in the cloud');
+    expect(chunks.filter((chunk) => chunk.includes('What is Qwen TTS'))).toHaveLength(1);
   });
 
   test('falls back to regex splitting when Intl.Segmenter is unavailable', () => {

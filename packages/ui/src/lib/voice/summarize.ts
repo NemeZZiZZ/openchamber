@@ -26,7 +26,13 @@ export function sanitizeForTTS(text: string): string {
         // Remove brackets and special chars
         .replace(/[[\]{}()<>|&;]/g, ' ')
         .replace(/\\/g, '')
-        // Collapse whitespace
-        .replace(/\s+/g, ' ')
+        // Collapse horizontal whitespace and blank lines while keeping line
+        // structure: formatted replies rely on line breaks to separate
+        // headings and list items, and TTS chunking treats them as hard
+        // boundaries.
+        .replace(/\r\n?/g, '\n')
+        .replace(/[^\S\n]+/g, ' ')
+        .replace(/ *\n */g, '\n')
+        .replace(/\n+/g, '\n')
         .trim();
 }
