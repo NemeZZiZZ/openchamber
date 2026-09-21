@@ -36,3 +36,16 @@ export function sanitizeForTTS(text: string): string {
         .replace(/\n+/g, '\n')
         .trim();
 }
+
+/**
+ * Appends a period to lines that end with a letter or digit. Browser
+ * speechSynthesis and macOS `say` treat a bare line break as near-space, so
+ * headings and list items without terminal punctuation run into the next
+ * line; a period gives every engine a real sentence boundary.
+ */
+export function ensureLineTerminalPunctuation(text: string): string {
+    return text
+        .split('\n')
+        .map((line) => (/[\p{L}\p{N}]$/u.test(line) ? line + '.' : line))
+        .join('\n');
+}
