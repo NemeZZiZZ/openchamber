@@ -154,7 +154,7 @@ describe('Z.ai quota provider', () => {
     expect(windows['5h'].giftReset).toBeUndefined();
   });
 
-  it('falls back to the most recently expired gift reset while no live resets remain', async () => {
+  it('attaches no gift reset while only expired resets remain', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(mockResponse({
         data: {
@@ -181,16 +181,12 @@ describe('Z.ai quota provider', () => {
     const windows = result.usage.windows;
 
     expect(result.ok).toBe(true);
-    // Temporary measure: with no live resets the latest expired record keeps
-    // the button visible for testing.
-    expect(windows['5h'].giftReset).toEqual({
-      recordId: 222222,
-      expireAt: Date.parse('2026-01-01T00:00:00+08:00'),
-    });
+    // Expired records carry no usable reset, so no button is attached.
+    expect(windows['5h'].giftReset).toBeUndefined();
     expect(windows.weekly.giftReset).toBeUndefined();
   });
 
-  it('shows an expired unavailable reset while nothing else remains', async () => {
+  it('attaches no gift reset for an expired unavailable record', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(mockResponse({
         data: {
@@ -215,10 +211,7 @@ describe('Z.ai quota provider', () => {
     const windows = result.usage.windows;
 
     expect(result.ok).toBe(true);
-    expect(windows['5h'].giftReset).toEqual({
-      recordId: 387233,
-      expireAt: Date.parse('2026-09-04T22:25:19+08:00'),
-    });
+    expect(windows['5h'].giftReset).toBeUndefined();
   });
 });
 

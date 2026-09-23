@@ -700,7 +700,7 @@ describe('Z.ai quota provider (VS Code parity)', () => {
     assert.equal(windows['5h']!.giftReset, undefined);
   });
 
-  test('falls back to the most recently expired gift reset while no live resets remain', async () => {
+  test('attaches no gift reset while only expired resets remain', async () => {
     const responses = [
       mockResponse({
         data: {
@@ -734,16 +734,11 @@ describe('Z.ai quota provider (VS Code parity)', () => {
     const windows = result.usage!.windows;
 
     assert.equal(result.ok, true);
-    // Temporary measure: with no live resets the latest expired record keeps
-    // the button visible for testing.
-    assert.deepEqual(windows['5h']!.giftReset, {
-      recordId: 222222,
-      expireAt: Date.parse('2026-01-01T00:00:00+08:00'),
-    });
+    assert.equal(windows['5h']!.giftReset, undefined);
     assert.equal(windows.weekly!.giftReset, undefined);
   });
 
-  test('shows an expired unavailable reset while nothing else remains', async () => {
+  test('attaches no gift reset for an expired unavailable record', async () => {
     const responses = [
       mockResponse({
         data: {
@@ -775,10 +770,7 @@ describe('Z.ai quota provider (VS Code parity)', () => {
     const windows = result.usage!.windows;
 
     assert.equal(result.ok, true);
-    assert.deepEqual(windows['5h']!.giftReset, {
-      recordId: 387233,
-      expireAt: Date.parse('2026-09-04T22:25:19+08:00'),
-    });
+    assert.equal(windows['5h']!.giftReset, undefined);
   });
 });
 
@@ -803,8 +795,16 @@ describe('Z.ai gift reset activation (VS Code parity)', () => {
     const [url, init] = fetchCalls[0]!;
     assert.equal(url, 'https://api.z.ai/api/biz/customer-package-reset/use');
     assert.equal(init?.method, 'POST');
-    assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer test-token');
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const headers = new Headers(init?.headers);
+    assert.equal(headers.get('Authorization'), 'Bearer test-token');
+    // SAFETY: body is the JSON stringified by activateQuotaGiftReset itself;
+    // only the documented activation fields are read back.
+    const body = JSON.parse(String(init?.body)) as {
+      targetType?: unknown;
+      resetType?: unknown;
+      recordId?: unknown;
+      requestId?: unknown;
+    };
     assert.equal(body.targetType, 'PERSONAL');
     assert.equal(body.resetType, 'FIVE_HOUR');
     assert.equal(body.recordId, 462029);

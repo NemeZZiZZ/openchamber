@@ -39,30 +39,24 @@ const parseZaiResetExpire = (value) => {
   return Number.isNaN(timestamp) ? null : timestamp;
 };
 
-// Keep only resets with a parseable time.
-// The nearest live expiry is the one worth activating first. z.ai flips
-// `available` to false once a record expires, so while no live resets remain
-// the fallback shows the most recently expired record regardless of its
-// availability — temporary, to keep the reset button testable.
+// Keep only claimable resets: available, with a parseable, not-yet-expired
+// time. The nearest expiry is the one worth activating first; expired records
+// are pointless to show. (z.ai also flips `available` to false on expiry, so
+// the check below stays a single condition.)
 const pickZaiGiftReset = (records) => {
   if (!Array.isArray(records)) return null;
   const now = Date.now();
   let best = null;
-  let fallback = null;
   for (const record of records) {
-    if (!record || !Number.isFinite(record?.recordId)) continue;
+    if (!record || record?.available !== true) continue;
+    if (!Number.isFinite(record?.recordId)) continue;
     const expireAt = parseZaiResetExpire(record.expireTime);
-    if (expireAt === null) continue;
-    if (expireAt > now) {
-      if (record?.available !== true) continue;
-      if (best === null || expireAt < best.expireAt) {
-        best = { recordId: record.recordId, expireAt };
-      }
-    } else if (fallback === null || expireAt > fallback.expireAt) {
-      fallback = { recordId: record.recordId, expireAt };
+    if (expireAt === null || expireAt <= now) continue;
+    if (best === null || expireAt < best.expireAt) {
+      best = { recordId: record.recordId, expireAt };
     }
   }
-  return best ?? fallback;
+  return best;
 };
 
 const ZAI_GIFT_RESET_URL = 'https://api.z.ai/api/biz/customer-package-reset/list?targetType=PERSONAL';
