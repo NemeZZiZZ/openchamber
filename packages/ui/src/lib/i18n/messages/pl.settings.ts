@@ -2153,6 +2153,7 @@ export const settingsDict = {
   'settings.usage.page.window.giftResetExpires': 'Reset limitu prezentu dostępny do {time}',
   'settings.usage.page.window.giftResetActivated': 'Reset limitu prezentu aktywowany',
   'settings.usage.page.window.giftResetActivateFailed': 'Nie udało się aktywować resetu limitu prezentu',
+  'settings.usage.page.window.giftResetNotNeeded': 'Reset limitu prezentu nie jest obecnie potrzebny',
   'settings.usage.page.state.noQuotaWindowsTitle': 'Brak raportowanych okien kwot',
   'settings.usage.page.state.providerNotConfiguredDescription': 'Dodaj dane uwierzytelniające w zakładce Dostawcy, aby włączyć śledzenie użycia.',
   'settings.usage.page.state.providerNotConfiguredTitle': 'Dostawca nie jest skonfigurowany',

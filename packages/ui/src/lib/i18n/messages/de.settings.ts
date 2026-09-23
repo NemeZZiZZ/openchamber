@@ -1263,6 +1263,7 @@ export const settingsDict = {
   'settings.usage.page.window.giftResetExpires': 'Geschenk-Limit-Reset verfügbar bis {time}',
   'settings.usage.page.window.giftResetActivated': 'Geschenk-Limit-Reset aktiviert',
   'settings.usage.page.window.giftResetActivateFailed': 'Geschenk-Limit-Reset konnte nicht aktiviert werden',
+  'settings.usage.page.window.giftResetNotNeeded': 'Derzeit ist kein Geschenk-Limit-Reset erforderlich',
   'settings.usage.pace.status.onTrack': 'Im Plan',
   'settings.usage.pace.status.slightlyFast': 'Leicht zu schnell',
   'settings.usage.pace.status.tooFast': 'Zu schnell',

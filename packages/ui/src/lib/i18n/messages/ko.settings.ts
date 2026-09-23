@@ -1293,6 +1293,7 @@ export const settingsDict = {
   'settings.usage.page.window.giftResetExpires': '기프트 한도 초기화는 {time}까지 사용할 수 있습니다',
   'settings.usage.page.window.giftResetActivated': '기프트 한도 초기화가 활성화되었습니다',
   'settings.usage.page.window.giftResetActivateFailed': '기프트 한도 초기화를 활성화하지 못했습니다',
+  'settings.usage.page.window.giftResetNotNeeded': '지금은 기프트 한도 초기화가 필요하지 않습니다',
   'settings.usage.pace.status.onTrack': '정상 추세',
   'settings.usage.pace.status.slightlyFast': '약간 빠름',
   'settings.usage.pace.status.tooFast': '너무 빠름',

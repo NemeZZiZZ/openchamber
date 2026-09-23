@@ -1293,6 +1293,7 @@ export const settingsDict = {
   "settings.usage.page.window.giftResetExpires": "Redefinição de limite de presente disponível até {time}",
   "settings.usage.page.window.giftResetActivated": "Redefinição de limite de presente ativada",
   "settings.usage.page.window.giftResetActivateFailed": "Falha ao ativar a redefinição de limite de presente",
+  "settings.usage.page.window.giftResetNotNeeded": "Nenhuma redefinição de limite de presente necessária no momento",
   "settings.usage.pace.status.onTrack": "A buen ritmo",
   "settings.usage.pace.status.slightlyFast": "Ligeramente rápido",
   "settings.usage.pace.status.tooFast": "Demasiado rápido",

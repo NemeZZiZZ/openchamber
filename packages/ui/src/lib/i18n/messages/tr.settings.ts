@@ -1287,6 +1287,7 @@ export const settingsDict = {
   'settings.usage.page.window.giftResetExpires': 'Hediye limiti sıfırlama {time} tarihine kadar geçerli',
   'settings.usage.page.window.giftResetActivated': 'Hediye limiti sıfırlaması etkinleştirildi',
   'settings.usage.page.window.giftResetActivateFailed': 'Hediye limiti sıfırlaması etkinleştirilemedi',
+  'settings.usage.page.window.giftResetNotNeeded': 'Şu anda hediye limiti sıfırlaması gerekli değil',
   'settings.usage.pace.status.onTrack': 'Hedefte',
   'settings.usage.pace.status.slightlyFast': 'Biraz hızlı',
   'settings.usage.pace.status.tooFast': 'Çok hızlı',

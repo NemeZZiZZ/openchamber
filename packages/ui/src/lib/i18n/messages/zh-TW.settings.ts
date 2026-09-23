@@ -1200,6 +1200,7 @@ export const settingsDict = {
   'settings.usage.page.window.giftResetExpires': '贈送額度重設可用至 {time}',
   'settings.usage.page.window.giftResetActivated': '贈送額度重設已啟用',
   'settings.usage.page.window.giftResetActivateFailed': '無法啟用贈送額度重設',
+  'settings.usage.page.window.giftResetNotNeeded': '目前無需贈送額度重設',
   'settings.usage.pace.status.onTrack': '正常',
   'settings.usage.pace.status.slightlyFast': '稍快',
   'settings.usage.pace.status.tooFast': '過快',

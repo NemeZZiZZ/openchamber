@@ -1293,6 +1293,7 @@ export const settingsDict = {
   "settings.usage.page.window.giftResetExpires": "Скидання ліміту-подарунка доступне до {time}",
   "settings.usage.page.window.giftResetActivated": "Скидання ліміту-подарунка активовано",
   "settings.usage.page.window.giftResetActivateFailed": "Не вдалося активувати скидання ліміту-подарунка",
+  "settings.usage.page.window.giftResetNotNeeded": "Наразі скидання ліміту-подарунка не потрібне",
   "settings.usage.pace.status.onTrack": "У нормі",
   "settings.usage.pace.status.slightlyFast": "Трохи швидко",
   "settings.usage.pace.status.tooFast": "Занадто швидко",

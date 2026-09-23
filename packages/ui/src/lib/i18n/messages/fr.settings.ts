@@ -1211,6 +1211,7 @@ export const settingsDict = {
   'settings.usage.page.window.giftResetExpires': 'Réinitialisation de limite cadeau disponible jusqu\'à {time}',
   'settings.usage.page.window.giftResetActivated': 'Réinitialisation de limite cadeau activée',
   'settings.usage.page.window.giftResetActivateFailed': 'Échec de l\'activation de la réinitialisation de limite cadeau',
+  'settings.usage.page.window.giftResetNotNeeded': 'Aucune réinitialisation de limite cadeau nécessaire pour le moment',
   'settings.usage.pace.status.onTrack': 'En bonne voie',
   'settings.usage.pace.status.slightlyFast': 'Un peu rapide',
   'settings.usage.pace.status.tooFast': 'Trop vite',

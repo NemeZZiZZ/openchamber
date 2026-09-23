@@ -1325,6 +1325,7 @@ export const settingsDict = {
   'settings.usage.page.window.giftResetExpires': 'Gift limit reset available until {time}',
   'settings.usage.page.window.giftResetActivated': 'Gift limit reset activated',
   'settings.usage.page.window.giftResetActivateFailed': 'Failed to activate gift limit reset',
+  'settings.usage.page.window.giftResetNotNeeded': 'Gift reset not needed right now',
   'settings.usage.pace.status.onTrack': 'On track',
   'settings.usage.pace.status.slightlyFast': 'Slightly fast',
   'settings.usage.pace.status.tooFast': 'Too fast',
