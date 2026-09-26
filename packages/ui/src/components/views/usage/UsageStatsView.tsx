@@ -20,9 +20,11 @@ import {
   averagePer,
   buildActivitySeries,
   cacheHitRate,
+  costPerMillionTokens,
   isEmptyReport,
   isSameLocalDay,
   projectDisplayName,
+  reasoningShare,
   tokenSegments,
   toolSuccessRate,
   type ActivityBar,
@@ -249,12 +251,23 @@ function StatTile({ label, value, hint }: { label: string; value: string; hint?:
   );
 }
 
-function Section({ title, caption, children }: { title: string; caption?: string; children: React.ReactNode }): React.ReactNode {
+function Section({
+  title,
+  caption,
+  actions,
+  children,
+}: {
+  title: string;
+  caption?: string;
+  /** Controls rendered on the title row, such as the model comparison toggle. */
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}): React.ReactNode {
   return (
     <section className="flex min-w-0 flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
         <h2 className="typography-ui-label font-semibold text-foreground">{title}</h2>
-        {caption ? <span className="truncate typography-micro text-muted-foreground">{caption}</span> : null}
+        {actions ?? (caption ? <span className="truncate typography-micro text-muted-foreground">{caption}</span> : null)}
       </div>
       {children}
     </section>
@@ -382,20 +395,27 @@ function TokenComposition({ stats, formats }: { stats: UsageStats; formats: Form
   );
 }
 
-/** Averages that need the whole report: cache reuse and cost of a session. */
+/** Averages that need the whole report: cache reuse, cost of a session, and
+ * how much of the output the model spent reasoning. */
 function EfficiencyTiles({ stats, formats }: { stats: UsageStats; formats: Formats }): React.ReactNode {
   const { t } = useI18n();
   const hitRate = cacheHitRate(stats.tokens);
   const costPerSession = averagePer(stats.cost, stats.sessions);
+  const perMillion = costPerMillionTokens(stats.cost, stats.tokens.total);
   const tokensPerSession = averagePer(stats.tokens.total, stats.sessions);
   const stepsPerSession = averagePer(stats.steps, stats.sessions);
+  const reasoning = reasoningShare(stats.tokens);
   return (
     <Section title={t('usageStats.efficiency.title')}>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <StatTile label={t('usageStats.efficiency.cacheHitRate')} value={hitRate === null ? '—' : formats.percent.format(hitRate)} />
         <StatTile
           label={t('usageStats.efficiency.costPerSession')}
           value={costPerSession === null ? '—' : formats.cost.format(costPerSession)}
+        />
+        <StatTile
+          label={t('usageStats.efficiency.costPerMillion')}
+          value={perMillion === null ? '—' : formats.cost.format(perMillion)}
         />
         <StatTile
           label={t('usageStats.efficiency.tokensPerSession')}
@@ -405,6 +425,7 @@ function EfficiencyTiles({ stats, formats }: { stats: UsageStats; formats: Forma
           label={t('usageStats.efficiency.stepsPerSession')}
           value={stepsPerSession === null ? '—' : formats.decimal.format(stepsPerSession)}
         />
+        <StatTile label={t('usageStats.efficiency.reasoningShare')} value={reasoning === null ? '—' : formats.percent.format(reasoning)} />
       </div>
     </Section>
   );
@@ -469,22 +490,61 @@ function ToolsSection({ stats, formats }: { stats: UsageStats; formats: Formats 
   );
 }
 
+/** Bar length basis for the model comparison: token volume, spend, or work done. */
+type ModelDimension = 'tokens' | 'cost' | 'steps';
+
+const MODEL_DIMENSIONS: readonly ModelDimension[] = ['tokens', 'cost', 'steps'];
+
+const MODEL_DIMENSION_LABEL_KEYS = {
+  tokens: 'usageStats.models.byTokens',
+  cost: 'usageStats.models.byCost',
+  steps: 'usageStats.models.bySteps',
+} as const satisfies Record<ModelDimension, I18nKey>;
+
 function ModelUsage({ models, formats }: { models: UsageModel[]; formats: Formats }): React.ReactNode {
   const { t } = useI18n();
   const providers = useConfigStore((state) => state.providers);
-  const maxTokens = models.reduce((max, model) => Math.max(max, model.tokens.total), 0);
+  const [dimension, setDimension] = React.useState<ModelDimension>('tokens');
+  const valueOf = React.useCallback(
+    (model: UsageModel): number =>
+      (dimension === 'tokens' ? model.tokens.total : dimension === 'cost' ? model.cost : model.steps),
+    [dimension],
+  );
+  // Ranked by the compared value, so the chart reads top (busiest) to bottom.
+  const ranked = React.useMemo(() => [...models].sort((a, b) => valueOf(b) - valueOf(a)), [models, valueOf]);
+  const max = ranked.reduce((peak, model) => Math.max(peak, valueOf(model)), 0);
 
   return (
-    <Section title={t('usageStats.models.title')}>
+    <Section
+      title={t('usageStats.models.title')}
+      actions={
+        models.length > 0 ? (
+          <div role="group" aria-label={t('usageStats.models.compareBy')} className="flex flex-wrap items-center gap-1">
+            {MODEL_DIMENSIONS.map((option) => (
+              <Button
+                key={option}
+                type="button"
+                variant="chip"
+                size="xs"
+                aria-pressed={dimension === option}
+                onClick={() => setDimension(option)}
+              >
+                {t(MODEL_DIMENSION_LABEL_KEYS[option])}
+              </Button>
+            ))}
+          </div>
+        ) : undefined
+      }
+    >
       {models.length === 0 ? (
         <p className="typography-micro text-muted-foreground">{t('usageStats.models.empty')}</p>
       ) : (
         <ul className="flex flex-col gap-3">
-          {models.map((model) => {
+          {ranked.map((model) => {
             const provider = providers.find((entry) => entry.id === model.providerID);
             const providerName = provider?.name || model.providerID;
             const name = getProviderModelDisplayName(provider, model.modelID) || model.modelID;
-            const share = maxTokens > 0 ? (model.tokens.total / maxTokens) * 100 : 0;
+            const share = max > 0 ? (valueOf(model) / max) * 100 : 0;
             return (
               <li key={`${model.providerID}/${model.modelID}#${model.variant ?? ''}`} className="flex min-w-0 flex-col gap-1">
                 <div className="flex min-w-0 items-center gap-2">
@@ -496,22 +556,29 @@ function ModelUsage({ models, formats }: { models: UsageModel[]; formats: Format
                     <span className="hidden shrink-0 typography-micro text-muted-foreground/80 sm:inline">{providerName}</span>
                   </span>
                   <span className="shrink-0 typography-micro tabular-nums text-muted-foreground">
-                    {`${formats.compact.format(model.tokens.total)} · ${formats.cost.format(model.cost)}`}
+                    {dimension === 'steps'
+                      ? `${formats.integer.format(model.steps)} · ${formats.cost.format(model.cost)}`
+                      : `${formats.compact.format(model.tokens.total)} · ${formats.cost.format(model.cost)}`}
                   </span>
                 </div>
-                {/* Track width is the share of the busiest model; segments split that by token kind. */}
+                {/* Track width is the leader's value in the compared dimension. Tokens
+                 * split that further by token kind; cost and steps stay one color. */}
                 <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-border/50" aria-hidden="true">
-                  <div className="flex h-full" style={{ width: `${share}%` }}>
-                    {tokenSegments(model.tokens)
-                      .filter((segment) => segment.value > 0)
-                      .map((segment) => (
-                        <div
-                          key={segment.key}
-                          className={cn('h-full', TOKEN_SEGMENT_CLASSES[segment.key])}
-                          style={{ width: `${(segment.value / model.tokens.total) * 100}%` }}
-                        />
-                      ))}
-                  </div>
+                  {dimension === 'tokens' ? (
+                    <div className="flex h-full" style={{ width: `${share}%` }}>
+                      {tokenSegments(model.tokens)
+                        .filter((segment) => segment.value > 0)
+                        .map((segment) => (
+                          <div
+                            key={segment.key}
+                            className={cn('h-full', TOKEN_SEGMENT_CLASSES[segment.key])}
+                            style={{ width: `${(segment.value / model.tokens.total) * 100}%` }}
+                          />
+                        ))}
+                    </div>
+                  ) : share > 0 ? (
+                    <div className="h-full bg-chart-1" style={{ width: `${share}%` }} />
+                  ) : null}
                 </div>
               </li>
             );

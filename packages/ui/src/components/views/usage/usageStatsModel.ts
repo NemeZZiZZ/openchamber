@@ -95,6 +95,17 @@ export const toolSuccessRate = (totals: { succeeded: number; failed: number }): 
   return completed > 0 ? totals.succeeded / completed : null;
 };
 
+/** Cost in USD per one million tokens, or null with no tokens at all. */
+export const costPerMillionTokens = (cost: number, tokens: number): number | null =>
+  (tokens > 0 ? (cost / tokens) * 1_000_000 : null);
+
+/** Share of reasoning inside everything the model produced; null when it
+ * produced nothing. */
+export const reasoningShare = (tokens: Pick<UsageTokens, 'output' | 'reasoning'>): number | null => {
+  const produced = tokens.output + tokens.reasoning;
+  return produced > 0 ? tokens.reasoning / produced : null;
+};
+
 export type TokenSegmentKey = 'input' | 'output' | 'cacheRead' | 'cacheWrite';
 
 /** One stacked-bar slice; zero values stay so legend order is stable. */

@@ -4,10 +4,12 @@ import {
   averagePer,
   buildActivitySeries,
   cacheHitRate,
+  costPerMillionTokens,
   isEmptyReport,
   isSameLocalDay,
   projectDisplayName,
   rangeStart,
+  reasoningShare,
   tokenSegments,
   toolSuccessRate,
 } from './usageStatsModel';
@@ -91,6 +93,22 @@ describe('toolSuccessRate', () => {
   test('succeeded over completed calls, unfinished excluded', () => {
     expect(toolSuccessRate({ succeeded: 3, failed: 1 })).toEqual(0.75);
     expect(toolSuccessRate({ succeeded: 0, failed: 0 })).toBeNull();
+  });
+});
+
+describe('costPerMillionTokens', () => {
+  test('scales spend to a million tokens', () => {
+    expect(costPerMillionTokens(2, 1_000_000)).toEqual(2);
+    expect(costPerMillionTokens(1, 250_000)).toEqual(4);
+    expect(costPerMillionTokens(3, 0)).toBeNull();
+  });
+});
+
+describe('reasoningShare', () => {
+  test('reasoning over everything the model produced', () => {
+    expect(reasoningShare({ output: 30, reasoning: 10 })).toEqual(0.25);
+    expect(reasoningShare({ output: 0, reasoning: 5 })).toEqual(1);
+    expect(reasoningShare({ output: 0, reasoning: 0 })).toBeNull();
   });
 });
 
