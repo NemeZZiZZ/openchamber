@@ -17,17 +17,37 @@ import { useUIStore, type TimeFormatPreference } from '@/stores/useUIStore';
 
 import {
   USAGE_RANGES,
+  averagePer,
   buildActivitySeries,
+  cacheHitRate,
   isEmptyReport,
   isSameLocalDay,
   projectDisplayName,
+  tokenSegments,
+  toolSuccessRate,
   type ActivityBar,
+  type TokenSegmentKey,
   type UsageRange,
 } from './usageStatsModel';
 import { selectUsageStatsEntry, useUsageStatsStore } from './usageStatsStore';
 
 /** Select value for the unfiltered report; project values are OpenChamber project ids. */
 const ALL_PROJECTS = '__all__';
+
+/** One bar color per token segment; the order matches `tokenSegments`. */
+const TOKEN_SEGMENT_CLASSES = {
+  input: 'bg-chart-1',
+  output: 'bg-chart-2',
+  cacheRead: 'bg-chart-3',
+  cacheWrite: 'bg-chart-4',
+} as const satisfies Record<TokenSegmentKey, string>;
+
+const TOKEN_SEGMENT_LABEL_KEYS = {
+  input: 'usageStats.tokens.input',
+  output: 'usageStats.tokens.output',
+  cacheRead: 'usageStats.tokens.cacheRead',
+  cacheWrite: 'usageStats.tokens.cacheWrite',
+} as const satisfies Record<TokenSegmentKey, I18nKey>;
 
 const RANGE_LABEL_KEYS = {
   '7d': 'usageStats.range.7d',
@@ -73,6 +93,8 @@ export function UsageStatsView({ className }: { className?: string }): React.Rea
     return {
       integer: new Intl.NumberFormat(intlLocale),
       compact: new Intl.NumberFormat(intlLocale, { notation: 'compact', maximumFractionDigits: 1 }),
+      decimal: new Intl.NumberFormat(intlLocale, { maximumFractionDigits: 1 }),
+      percent: new Intl.NumberFormat(intlLocale, { style: 'percent', maximumFractionDigits: 1 }),
       cost: new Intl.NumberFormat(intlLocale, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }),
       day: new Intl.DateTimeFormat(intlLocale, { month: 'short', day: 'numeric', year: 'numeric' }),
     };
@@ -172,6 +194,8 @@ function formatUpdatedAt(timestamp: number, preference: TimeFormatPreference): s
 type Formats = {
   integer: Intl.NumberFormat;
   compact: Intl.NumberFormat;
+  decimal: Intl.NumberFormat;
+  percent: Intl.NumberFormat;
   cost: Intl.NumberFormat;
   day: Intl.DateTimeFormat;
 };
@@ -204,7 +228,13 @@ function UsageReport({ stats, formats }: { stats: UsageStats; formats: Formats }
 
       <ActivityChart stats={stats} formats={formats} />
 
+      <TokenComposition stats={stats} formats={formats} />
+
       <ModelUsage models={stats.models} formats={formats} />
+
+      <EfficiencyTiles stats={stats} formats={formats} />
+
+      <ToolsSection stats={stats} formats={formats} />
     </>
   );
 }
@@ -319,6 +349,126 @@ function ActivityChart({ stats, formats }: { stats: UsageStats; formats: Formats
   );
 }
 
+/** Whole-range token split as one stacked bar with a per-segment legend. */
+function TokenComposition({ stats, formats }: { stats: UsageStats; formats: Formats }): React.ReactNode {
+  const { t } = useI18n();
+  const segments = tokenSegments(stats.tokens);
+  if (stats.tokens.total <= 0) return null;
+  return (
+    <Section title={t('usageStats.tokens.title')}>
+      <div className="flex flex-col gap-2.5 rounded-lg border border-border/60 bg-[var(--surface-elevated)] px-3 py-3">
+        <div className="flex h-2.5 w-full overflow-hidden rounded-full" aria-hidden="true">
+          {segments
+            .filter((segment) => segment.value > 0)
+            .map((segment) => (
+              <div
+                key={segment.key}
+                className={cn('h-full', TOKEN_SEGMENT_CLASSES[segment.key])}
+                style={{ width: `${(segment.value / stats.tokens.total) * 100}%` }}
+              />
+            ))}
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+          {segments.map((segment) => (
+            <div key={segment.key} className="flex min-w-0 items-center gap-1.5">
+              <span className={cn('size-2 shrink-0 rounded-full', TOKEN_SEGMENT_CLASSES[segment.key])} aria-hidden="true" />
+              <span className="min-w-0 truncate typography-micro text-muted-foreground">{t(TOKEN_SEGMENT_LABEL_KEYS[segment.key])}</span>
+              <span className="ml-auto shrink-0 typography-micro tabular-nums text-foreground">{formats.compact.format(segment.value)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+/** Averages that need the whole report: cache reuse and cost of a session. */
+function EfficiencyTiles({ stats, formats }: { stats: UsageStats; formats: Formats }): React.ReactNode {
+  const { t } = useI18n();
+  const hitRate = cacheHitRate(stats.tokens);
+  const costPerSession = averagePer(stats.cost, stats.sessions);
+  const tokensPerSession = averagePer(stats.tokens.total, stats.sessions);
+  const stepsPerSession = averagePer(stats.steps, stats.sessions);
+  return (
+    <Section title={t('usageStats.efficiency.title')}>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <StatTile label={t('usageStats.efficiency.cacheHitRate')} value={hitRate === null ? '—' : formats.percent.format(hitRate)} />
+        <StatTile
+          label={t('usageStats.efficiency.costPerSession')}
+          value={costPerSession === null ? '—' : formats.cost.format(costPerSession)}
+        />
+        <StatTile
+          label={t('usageStats.efficiency.tokensPerSession')}
+          value={tokensPerSession === null ? '—' : formats.compact.format(tokensPerSession)}
+        />
+        <StatTile
+          label={t('usageStats.efficiency.stepsPerSession')}
+          value={stepsPerSession === null ? '—' : formats.decimal.format(stepsPerSession)}
+        />
+      </div>
+    </Section>
+  );
+}
+
+/** Median tool-call duration in compact clock form: 340 ms, 2.4 s, 1 m 5 s. */
+function formatDuration(ms: number, formats: Formats): string {
+  if (ms < 1000) return `${formats.integer.format(Math.round(ms))} ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${formats.decimal.format(seconds)} s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${formats.integer.format(minutes)} m ${formats.integer.format(Math.round(seconds % 60))} s`;
+}
+
+/** Tool-call totals, plus the per-tool rows when the request asked for detail. */
+function ToolsSection({ stats, formats }: { stats: UsageStats; formats: Formats }): React.ReactNode {
+  const { t } = useI18n();
+  const tools = stats.tools;
+  if (tools.mode === 'none' || tools.totals.calls === 0) return null;
+  const successRate = toolSuccessRate(tools.totals);
+  // OpenCode returns detail rows sorted by calls; keep the page light past a toolbox.
+  const rows = tools.mode === 'detail' ? tools.usage.filter((tool) => tool.calls > 0).slice(0, 8) : [];
+  return (
+    <Section title={t('usageStats.tools.title')}>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <StatTile label={t('usageStats.tools.calls')} value={formats.integer.format(tools.totals.calls)} />
+        <StatTile label={t('usageStats.tools.successRate')} value={successRate === null ? '—' : formats.percent.format(successRate)} />
+        <StatTile label={t('usageStats.tools.failed')} value={formats.integer.format(tools.totals.failed)} />
+        <StatTile label={t('usageStats.tools.unfinished')} value={formats.integer.format(tools.totals.unfinished)} />
+      </div>
+      {rows.length > 0 ? (
+        <ul className="flex flex-col gap-2.5 rounded-lg border border-border/60 bg-[var(--surface-elevated)] px-3 py-3">
+          {rows.map((tool) => (
+            <li key={tool.name} className="flex min-w-0 flex-col gap-1">
+              <div className="flex min-w-0 items-baseline gap-2">
+                <span className="min-w-0 flex-1 truncate font-mono typography-micro text-foreground" title={tool.name}>
+                  {tool.name}
+                </span>
+                <span className="shrink-0 typography-micro tabular-nums text-muted-foreground">
+                  {tool.durationP50 !== null
+                    ? t('usageStats.tools.rowStats', {
+                        count: formats.integer.format(tool.calls),
+                        duration: formatDuration(tool.durationP50, formats),
+                      })
+                    : t('usageStats.tools.rowStatsNoDuration', { count: formats.integer.format(tool.calls) })}
+                </span>
+              </div>
+              {/* Succeeded and failed sit on the grey track; the gap is unfinished work. */}
+              <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-border/50" aria-hidden="true">
+                {tool.succeeded > 0 ? (
+                  <div className="h-full bg-status-success" style={{ width: `${(tool.succeeded / tool.calls) * 100}%` }} />
+                ) : null}
+                {tool.failed > 0 ? (
+                  <div className="h-full bg-status-error" style={{ width: `${(tool.failed / tool.calls) * 100}%` }} />
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </Section>
+  );
+}
+
 function ModelUsage({ models, formats }: { models: UsageModel[]; formats: Formats }): React.ReactNode {
   const { t } = useI18n();
   const providers = useConfigStore((state) => state.providers);
@@ -349,8 +499,19 @@ function ModelUsage({ models, formats }: { models: UsageModel[]; formats: Format
                     {`${formats.compact.format(model.tokens.total)} · ${formats.cost.format(model.cost)}`}
                   </span>
                 </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-border/50">
-                  <div className="h-full rounded-full bg-chart-1" style={{ width: `${share}%` }} />
+                {/* Track width is the share of the busiest model; segments split that by token kind. */}
+                <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-border/50" aria-hidden="true">
+                  <div className="flex h-full" style={{ width: `${share}%` }}>
+                    {tokenSegments(model.tokens)
+                      .filter((segment) => segment.value > 0)
+                      .map((segment) => (
+                        <div
+                          key={segment.key}
+                          className={cn('h-full', TOKEN_SEGMENT_CLASSES[segment.key])}
+                          style={{ width: `${(segment.value / model.tokens.total) * 100}%` }}
+                        />
+                      ))}
+                  </div>
                 </div>
               </li>
             );
