@@ -386,7 +386,12 @@ function TokenComposition({ stats, formats }: { stats: UsageStats; formats: Form
             <div key={segment.key} className="flex min-w-0 items-center gap-1.5">
               <span className={cn('size-2 shrink-0 rounded-full', TOKEN_SEGMENT_CLASSES[segment.key])} aria-hidden="true" />
               <span className="min-w-0 truncate typography-micro text-muted-foreground">{t(TOKEN_SEGMENT_LABEL_KEYS[segment.key])}</span>
-              <span className="ml-auto shrink-0 typography-micro tabular-nums text-foreground">{formats.compact.format(segment.value)}</span>
+              <span className="ml-auto shrink-0 typography-micro tabular-nums text-foreground">
+                {t('usageStats.tokens.legendValue', {
+                  value: formats.compact.format(segment.value),
+                  share: formats.percent.format(segment.value / stats.tokens.total),
+                })}
+              </span>
             </div>
           ))}
         </div>
