@@ -1,5 +1,5 @@
 import type { MessageRecord } from '@/lib/messageCompletion';
-import type { ToolInput } from '@/lib/opencode/model';
+import type { Part, Session, ToolInput } from '@/lib/opencode/model';
 
 import { isSubagentTool, normalizeToolName } from '@/lib/opencode/tools';
 
@@ -31,6 +31,49 @@ export const readTaskSessionIdFromRecord = (value: unknown): string | undefined 
     if (!value || typeof value !== 'object') return undefined;
     const record = value as Record<string, unknown>;
     return normalizeSessionIdCandidate(record.sessionID) ?? normalizeSessionIdCandidate(record.sessionId);
+};
+
+/**
+ * OpenCode 2.x publishes a running subagent's child session id only through
+ * the ephemeral `session.tool.progress` event; the stored tool part carries
+ * no metadata until the call settles. A parent message loaded over REST while
+ * the subagent runs therefore has no join. This recovers it from the child
+ * session record: a child of the parent session, created after the call
+ * started, running the requested agent, and not already joined to another
+ * Task call of the same message. Anything but exactly one candidate yields
+ * `undefined`; the caller drops this fallback once the real id arrives.
+ */
+export const resolveRunningTaskChildSessionId = (options: {
+    sessions: readonly Session[];
+    parentSessionID: string;
+    startedAt: number;
+    /** The Task's `input.agent`; OpenCode stores this id on the child session. */
+    agent: ToolInput[string] | undefined;
+    siblingParts: readonly Part[] | undefined;
+    partID: string;
+}): string | undefined => {
+    const { sessions, parentSessionID, startedAt, agent, siblingParts, partID } = options;
+    let claimed: Set<string> | undefined;
+    for (const sibling of siblingParts ?? []) {
+        if (sibling.id === partID || sibling.type !== 'tool' || !isSubagentTool(normalizeToolName(sibling.tool))) continue;
+        const siblingSessionID = sibling.state.status === 'pending'
+            ? undefined
+            : readTaskSessionIdFromRecord(sibling.state.metadata);
+        if (!siblingSessionID) continue;
+        claimed ??= new Set();
+        claimed.add(siblingSessionID);
+    }
+
+    let match: string | undefined;
+    for (const session of sessions) {
+        if (session.parentID !== parentSessionID) continue;
+        if (session.time.created < startedAt) continue;
+        if (agent !== undefined && session.agent !== undefined && session.agent !== agent) continue;
+        if (claimed?.has(session.id)) continue;
+        if (match !== undefined) return undefined;
+        match = session.id;
+    }
+    return match;
 };
 
 export const normalizeTaskSummaryEntries = (value: unknown): TaskToolSummaryEntry[] => {
@@ -158,11 +201,23 @@ const unwrapTaskResultEnvelope = (output: string): string => {
     return resultBlock[1];
 };
 
+// OpenCode 2's subagent tool wraps a completed result the same way, without
+// an inner result block (issue #4066):
+//   <subagent sessionID="ses_…" state="completed">
+//   …result Markdown…
+//   </subagent>
+// Only an output that is exactly one such envelope is unwrapped.
+const SUBAGENT_ENVELOPE_PATTERN = /^\s*<subagent(?:\s[^>]*)?>\r?\n([\s\S]*?)\r?\n<\/subagent>\s*$/i;
+
+const unwrapSubagentEnvelope = (output: string): string => {
+    return output.match(SUBAGENT_ENVELOPE_PATTERN)?.[1] ?? output;
+};
+
 // The task tool renders its output through the markdown parser instead of the
 // shared tool-output path, so it needs the same size guard as
 // `getToolOutputText` (issue #2265): an unbounded single string reaching the
 // parser can exhaust V8's Zone allocator and crash the renderer.
 export const prepareTaskToolOutput = (output: string | undefined): string => {
     if (!output) return '';
-    return capToolOutputText(stripTaskMetadataFromOutput(unwrapTaskResultEnvelope(output)));
+    return capToolOutputText(stripTaskMetadataFromOutput(unwrapSubagentEnvelope(unwrapTaskResultEnvelope(output))));
 };

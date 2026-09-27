@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import yaml from 'yaml';
 import { parse as parseJsonc, printParseErrorCode, type ParseError } from 'jsonc-parser';
+import { resolveNpmRegistryRequest } from '../../web/server/lib/opencode/npm-registry-config.js';
 import {
   toAgentEntity,
   fromAgentEntity,
@@ -13,6 +14,7 @@ import {
   isLegacyCommandFrontmatter,
   toMcpEntity,
   toProviderEntity,
+  readStoredProviderEntry,
   toProviderPackage,
   toNpmPackage,
   toPluginEntity,
@@ -31,6 +33,7 @@ import {
   parseModelSelection,
   formatModelSelection,
   writeWebSearchSelection,
+  writeWarmingEnabled,
   findWebSearchProjectOverride,
   type AgentEntity,
   type CommandEntity,
@@ -1223,8 +1226,9 @@ const NPM_CACHE_TTL_MS = 3_600_000;
 
 const lookupNpmPackage = async (name: string): Promise<NpmLookupResult> => {
   try {
-    const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name).replace(/^%40/, '@')}`, {
-      headers: { Accept: 'application/json', 'User-Agent': 'openchamber-vscode/dev' },
+    const request = resolveNpmRegistryRequest(name);
+    const response = await fetch(request.url, {
+      headers: { Accept: 'application/json', 'User-Agent': 'openchamber-vscode/dev', ...request.headers },
       signal: AbortSignal.timeout(5000),
     });
     if (response.ok) {
@@ -1580,6 +1584,15 @@ export const setWebSearchSelection = (selection: WebSearchSelection): { changed:
   const layers = readConfigLayers();
   const target = getJsonWriteTarget(layers, AGENT_SCOPE.USER);
   const changed = writeWebSearchSelection(target.config, selection);
+  if (changed) writeConfig(target.config, target.path);
+  return { changed };
+};
+
+/** Mirror of the web server's `setWarmingEnabled`: same target file as the web search choice. */
+export const setWarmingEnabled = (enabled: boolean): { changed: boolean } => {
+  const layers = readConfigLayers();
+  const target = getJsonWriteTarget(layers, AGENT_SCOPE.USER);
+  const changed = writeWarmingEnabled(target.config, enabled);
   if (changed) writeConfig(target.config, target.path);
   return { changed };
 };
@@ -2149,6 +2162,12 @@ export const getProviderSources = (providerId: string, workingDirectory?: string
     project: { exists: providerExistsIn(layers.projectConfig, providerId), path: layers.paths.projectPath ?? null },
     custom: { exists: providerExistsIn(layers.customConfig, providerId), path: layers.paths.customPath },
   };
+};
+
+/** The stored entry the edit form starts from; custom > project > user, like the edit scope. */
+export const getStoredProviderConfig = (providerId: string, workingDirectory?: string) => {
+  const layers = readConfigLayers(workingDirectory);
+  return readStoredProviderEntry([layers.customConfig, layers.projectConfig, layers.userConfig], providerId);
 };
 
 export const removeProviderConfig = (providerId: string, workingDirectory?: string, scope: 'user' | 'project' | 'custom' = 'user') => {

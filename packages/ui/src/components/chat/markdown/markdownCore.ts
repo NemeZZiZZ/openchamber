@@ -248,6 +248,9 @@ const openFenceMarker = (raw: string): { char: string; size: number } | null => 
 };
 
 const rememberLiveSplit = (text: string, blocks: MarkdownBlock[]): void => {
+  // The lexer path keeps a text with reference definitions as one healed
+  // block; extending it as a plain fence would render it differently.
+  if (hasReferenceDefinitions(text)) return;
   const last = blocks.at(-1);
   const fence = last ? openFenceMarker(last.raw) : null;
   // The fence block has to be exactly the tail of the text for the added text
@@ -577,7 +580,8 @@ const renderMathInText = (text: string): string =>
     if (display !== undefined) {
       return renderKatex(unescapeHtml(display), match, true);
     }
-    if (inline !== undefined && !DOLLAR_AMOUNT_RE.test(inline)) {
+    // The quote guard also runs on the decoded text, where `&quot;` is a quote.
+    if (inline !== undefined && !unescapeHtml(inline).includes('"') && !DOLLAR_AMOUNT_RE.test(inline)) {
       return renderKatex(unescapeHtml(inline), match, false);
     }
     return match;

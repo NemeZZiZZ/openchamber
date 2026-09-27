@@ -120,6 +120,7 @@ const createRuntime = (overrides = {}, stateOverrides = {}, envOverrides = {}) =
     getManagedOpenCodeShellEnvSnapshot: vi.fn(() => ({
       PATH: '/home/user/.bun/bin:/usr/local/bin:/usr/bin',
       SHELL_ONLY: 'yes',
+      OPENCODE_PASSWORD: 'shell-password',
       OPENCODE_SERVER_PASSWORD: 'shell-password',
     })),
     ...overrides,
@@ -240,7 +241,34 @@ describe('OpenCode lifecycle', () => {
     expect(runtime.testState.openCodeBaseUrl).toBe('http://seamus:4095');
   });
 
-  it('warms recently used directories after a successful bootstrap', async () => {
+  it('attaches to an OPENCODE_HOST running OpenCode v1 instead of starting a managed server', async () => {
+    const requested = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      const href = String(url);
+      requested.push(href);
+      if (href.endsWith('/global/health')) return Response.json({ healthy: true, version: '1.18.32' });
+      return new Response('<html>OpenCode</html>', { headers: { 'content-type': 'text/html' } });
+    });
+    const runtime = createRuntime({
+      reapManagedOrphanedProcesses: vi.fn(async () => ({ reaped: 0 })),
+    }, {}, {
+      ENV_CONFIGURED_OPENCODE_PORT: null,
+      ENV_CONFIGURED_OPENCODE_HOST: { origin: 'http://seamus:4095', port: 4095 },
+      ENV_EFFECTIVE_PORT: 4095,
+    });
+
+    await runtime.bootstrapOpenCodeAtStartup();
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(requested).toContain('http://seamus:4095/global/health');
+    expect(runtime.testState.isExternalOpenCode).toBe(true);
+    expect(runtime.testState.isOpenCodeReady).toBe(false);
+    expect(runtime.testState.openCodeBaseUrl).toBe('http://seamus:4095');
+    expect(runtime.testState.openCodePort).toBe(4095);
+    expect(runtime.testState.lastOpenCodeError).toContain('1.18.32');
+  });
+
+  it('warms only the last-used directory after a successful bootstrap', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({ version: '2.0.15', pid: 1, urls: [], paths: { tmp: '/tmp' } }),
@@ -264,9 +292,9 @@ describe('OpenCode lifecycle', () => {
     const warmupUrls = fetchMock.mock.calls
       .map(([url]) => String(url))
       .filter((url) => url.includes('/api/session?'));
+    // Each warmed directory boots its whole MCP fleet on OpenCode 2 (#4018).
     expect(warmupUrls).toEqual([
       'http://127.0.0.1:45678/api/session?directory=%2Ftmp%2Fworktree-a&limit=1',
-      'http://127.0.0.1:45678/api/session?directory=%2Ftmp%2Fproject-b&limit=1',
     ]);
   });
 
@@ -636,6 +664,7 @@ describe('OpenCode lifecycle', () => {
     expect(args).toEqual(['serve', '--hostname', '127.0.0.1', '--port', '45678']);
     expect(options.env.PATH).toBe('/home/user/.bun/bin:/usr/local/bin:/usr/bin');
     expect(options.env.SHELL_ONLY).toBe('yes');
+    expect(options.env.OPENCODE_PASSWORD).toBe('password');
     expect(options.env.OPENCODE_SERVER_PASSWORD).toBe('password');
     expect(server.exitCode).toBeNull();
     expect(server.signalCode).toBeNull();
@@ -711,6 +740,7 @@ describe('OpenCode lifecycle', () => {
       OPENCODE_CONFIG_CONTENT: '{"plugin":["file:///tool.js"]}',
       OPENCHAMBER_AGENT_TOOL_TOKEN: 'ephemeral',
       PATH: '/untrusted/path',
+      OPENCODE_PASSWORD: 'untrusted-password',
       OPENCODE_SERVER_PASSWORD: 'untrusted-password',
     }));
 
@@ -722,6 +752,7 @@ describe('OpenCode lifecycle', () => {
     expect(options.env.OPENCODE_CONFIG_CONTENT).toBe('{"plugin":["file:///tool.js"]}');
     expect(options.env.OPENCHAMBER_AGENT_TOOL_TOKEN).toBe('ephemeral');
     expect(options.env.PATH).toBe('/home/user/.bun/bin:/usr/local/bin:/usr/bin');
+    expect(options.env.OPENCODE_PASSWORD).toBe('password');
     expect(options.env.OPENCODE_SERVER_PASSWORD).toBe('password');
 
     await server.close();

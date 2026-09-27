@@ -160,7 +160,11 @@ interrupted arrive as their own events.
 ## Committing a revert
 
 A staged revert is a marker (`session.revert.messageID`); the transcript
-keeps the reverted messages and hides them. Sending or compacting past the
+keeps the reverted messages and hides them. Reverting or forking from a user
+message cuts at the first of the synthetic context carriers right before it,
+so the marker can name a carrier: the carriers leave with their message
+instead of riding along with the next prompt, and the reverted user message is
+the first user message at or after the marker. Sending or compacting past the
 marker commits it: OpenCode deletes the boundary message and everything after
 it in one `session.revert.committed` event, with no `message.removed` per
 record. `events.ts` translates it into a `session.revert.committed` sync
@@ -268,7 +272,7 @@ Session message loads use runtime, normalized directory, session ID, SDK epoch, 
 
 An authoritative `session.deleted` event also clears persisted UI state before routing metadata can be removed. Confirmed local deletion and accepted `404` deletion do the same directly instead of depending on the event echo. Cleanup is identity-owned by runtime, normalized directory, and session ID: queued messages, persisted todos, composer drafts, per-session input-history buckets, inline-comment drafts, and pins clear only that tuple, while the active runtime's folder store removes the session from every active or archived folder scope. Stale-runtime events and unresolved/global directory identities do not mutate persisted state.
 
-Persisted sidebar state is never reconciled destructively from the first successful startup list. That list establishes an authoritative active+archived baseline. Only a session present in that baseline and omitted from a later complete snapshot is treated as a missed external deletion. Archive and directory moves retain the session ID across snapshots and are not deletion cleanup. This favors harmless hidden stale metadata over irreversible user-state loss when startup data is incomplete.
+Persisted sidebar state is never reconciled destructively from the first successful startup list. That list establishes an authoritative active+archived baseline. Only a session present in that baseline and omitted from a later complete snapshot is treated as a missed external deletion, and that judgment commits the same reconciliation as a confirmed deletion through `reconcileExternallyDeletedSession`: the session leaves every live store and the global cache, the current-session pointer clears when it pointed there, and `cleanupPersistedSessionState` runs. Clearing only persisted state was the earlier behavior, and it left the session in every live store, in the sidebar, and as the open chat still prompting an id the server no longer has when the `session.deleted` event was lost. The reconciliation is rechecked against the captured runtime before it mutates the non-runtime-scoped live, global, and UI stores. Archive and directory moves retain the session ID across snapshots and are not deletion cleanup. The judgment runs in `MainLayout` and `VSCodeLayout` through `useSessionListSync`, which see a snapshot every 45-second global poll, and in the mobile shell's `MobileAppContent`, which has no poller and sees a snapshot whenever the sessions sheet opens or the last session is restored. This favors harmless hidden stale metadata over irreversible user-state loss when startup data is incomplete.
 
 Session materialization recency is keyed by runtime and directory. Foreground loads promote navigation recency. Prefetch reserves only unused per-directory capacity before HTTP starts and inserts speculative entries behind visited sessions. A prefetch cache hit does not promote recency, and a full cache skips uncached speculation. Otherwise the sidebar's neighbor prefetch displaces visited sessions and causes repeated HTTP on every navigation cycle near the limit. Prefetch pagination metadata has a global count ceiling and is removed with session eviction, directory disposal, loader runtime reconfiguration, and loader disposal.
 
@@ -292,11 +296,52 @@ then the normal cadence continues. Store error status, including a chats-root
 lookup failure, drives recovery because the loader returns retained data on
 failure. Runtime changes retire the old timer and start a fresh load immediately;
 late completions cannot restart the old timer or seed the new runtime.
-Embedded chats and the VS Code agent-manager panel do not poll.
+Embedded chats do not poll.
 The sidebar and tray consume the same store and must not start their own
 full-list timers. Surface-specific refreshes, such as opening the mobile session
 sheet or returning from suspension, may still request freshness at their
 explicit lifecycle edge; the store coalesces an overlapping in-flight load.
+
+**Isolated spaces.** With the feature on, the first global page carries the
+host's `spaces` mark: one entry per space with its name, the state of its last
+answer (`complete`, `partial`, `stale`, `unknown`), the registered project it
+was made for and its directory inside. `lib/spaces/spaces-store.ts` keeps the
+marks of the last complete load, reset on a runtime switch. A space's sessions
+live at `/spaces/<id>/<folder>`; `lib/spaces/space-route.ts` turns that
+directory into the `/api/spaces/<id>/` prefix at call time, and `runtimeFetch`
+applies it from the directory a request names in the open, so the sidebar's
+per-directory reads of a space go to the space. Rules that follow from the
+mark: a session of a space whose answer was not `complete` may be missing from
+the snapshot without being deleted, so the authoritative cleanup skips it; the
+event pipeline hands the host's `openchamber:space-stream` announcement to
+`sync-context.tsx`, which marks a lost stream as stale and, when it is back,
+re-reads that one space's directories with `refreshSessionsForDirectories`,
+whose answer marks the space reachable again. The active-session snapshot that
+settles an unfinished turn is the host's, global, and never covers a space, so
+`getActiveSessionStatuses` asks a space directory's own server for it; the
+host's empty answer would otherwise mark a turn running inside as interrupted.
+A space that dies in the middle of a turn sends no settle event, so the
+session keeps the busy state it last reported until the space answers again
+or the user acts; the group's stale mark is what says the space is gone. The
+status and repair actions of a later stage own that.
+
+The host also announces each step of a creation as
+`openchamber:space-progress`; the pipeline hands it to `sync-context.tsx`, which
+moves the space's entry in `spaces-store.ts` on. That store also keeps the
+journey route's list, the only source that knows a space still being made or
+one whose making failed, read on every (re)connection while the switch is on:
+a step announced after a read began wins over that read's answer, and a read a
+runtime switch overtook is dropped. The sidebar shows a group for every space
+of either list (`useSidebarSpaces`). VS Code never applies
+the prefix and never shows a space (decision 16 of the design).
+
+Not done here: the session-keyed actions still fall back to the current
+directory when nothing confirmed the session's own, in `session-actions.ts`
+and inside the SDK wrapper's `clientFor`. A guess that names the wrong side is
+refused by the server's guards or answered not-found by the far side, which
+cannot act on a foreign id, so nothing crosses the boundary; the action fails
+where it used to succeed by luck. Making those actions fail before the request
+is a later stage.
 
 ### Session retention
 
@@ -368,11 +413,15 @@ Reconciliation walks the running turns and asks the snapshot whether it covers e
 
 **Only the stamp expires a persisted start.** A snapshot that covers a session without reporting it busy is not proof the turn ended: bootstrap fetches status and sessions in parallel and directory scopes resolve at different times, so a snapshot legitimately arrives before it can see a running session. Treating one of those as a settle deleted the start moments before the real busy snapshot arrived, which reset every counter to zero on reload. Settles therefore act only on sessions that already have a live start in this page session.
 
+Forks (`forked-session.ts`): OpenCode 2.x publishes only `session.forked` for a fork, with ids and no record, and no `session.created` follows. `handleEvent` reads the fork's record with `session.get` and replays it as a `session.created`, so other clients show the fork without a list reload. A session the global cache already holds (the forking client inserted it from the fork response) is skipped; a failed read or a runtime switch applies nothing.
+
 Child-session discovery (`child-session-discovery.ts`) adds only children the global sessions cache does not list as archived: the listing asks for active children, but a response that left the server before an archive completed still carries them without `time.archived`, and re-adding them would show the just-archived subagents as active orphans until the next refresh.
 
 The active-session watchdog in `sync-context.tsx` sends status recovery through the active-session priority of `runBackgroundNetworkTask`. Its child-session discovery pages use `runSessionListNetworkTask`, alongside global and bootstrap session pages. Both lanes live in `@/lib/background-network`. Git, skills, and directory initialization use the background lane. These limits reserve browser connections for interactive message requests rather than letting startup fan-out occupy the whole pool.
 
 Reconnect and watchdog candidates come from non-idle status, the viewed session, or unresolved materialized messages and tool parts. Only ancestors of those candidates join recovery. Parentage in cached session history alone starts no status polling, child discovery, or message materialization; an idle directory with only cached metadata does not scan its history.
+
+The watchdog calls the stream stale after 20 s without stream activity. Stream activity is anything the event pipeline receives, reported through `onStreamActivity`: an event, a WebSocket frame, or a keepalive that carries no event. OpenCode 2 sends its heartbeat as an SSE comment and the WebSocket bridge sends `openchamber:heartbeat`, and neither becomes a delivered event. Counting delivered events alone made an idle viewed session look stale, so the stream reconnected and resynced every 15 to 20 s, as reported in #4062. Starting a connection attempt is not activity, so a stream that receives nothing still goes stale.
 
 Imperative cross-directory session lookups use the cached ID index from `getAllSyncSessionMap()`. The index is rebuilt only when a child store's `state.session` reference changes; permission lineage checks must reuse it instead of rebuilding a full session map per call.
 
@@ -420,7 +469,7 @@ Rules:
 4. Async commits are generation-checked. Runtime switches, forced refreshes, eviction, and disposal must reject stale completion.
 5. Prefetch coverage and persisted directory data are runtime-scoped. Legacy persisted directory entries may seed startup continuity, but they are not live truth.
 6. Message and part materialization preserves references for unchanged records and maintains direct message-to-parts lookup. Consumers subscribe to the selected session's records rather than broad message/part containers.
-   Directory `sessionStatusReady` records successful status-snapshot authority independently of bootstrap's general readiness. Before that flag or an explicit session status arrives, telemetry treats an omitted status as unknown. A failed status request cannot grant idle authority; the flag is not persisted.
+   Directory `sessionStatusReady` records successful status-snapshot authority independently of bootstrap's general readiness. Before that flag or an explicit session status arrives, telemetry treats an omitted status as unknown. Archiving invalidates status authority for that session alone: restoring it cannot inherit the directory's older snapshot as proof of idle. A live status event or a successful fresh status read clears the invalidation; a failed read leaves it unknown. Neither the flag nor invalidations are persisted.
 7. Pagination demand must carry the selected session's effective directory. It must not fall back to the sync provider directory because the visible session may belong to another worktree.
 8. The ref-stable loader is disposed only after the current task when its provider unmounts. This lets React Strict Mode's development setup → cleanup → setup probe retain a usable loader for child effects, while real disposal still invalidates the preceding lifecycle's work.
 9. Transcript arrays are chronological by `message.time.created`, with message ID used only as a deterministic equal-time tie-breaker. Message IDs are identity and reconciliation keys, not chronology: OpenCode's fixed-width sortable timestamp prefix rolls over, so a newer `msg_000...` can follow an older `msg_fff...`. Fetch, pagination, materialization, optimistic insertion, events, reconnect inspection, rendering, and revert/undo/redo must preserve this contract.
@@ -442,7 +491,11 @@ error for the open session under its last message while that turn is the
 latest one (`SessionErrorNotice`), and also names a user message that an idle
 session has left unanswered for five seconds, since an accepted send that
 produced neither a message nor an error would otherwise look like nothing
-happened. Both buffers — session errors and rejected sends — appear in the
+happened. Before that no-reply notice shows, the session tail is re-read
+from the server (the live stream may have dropped the reply); the notice
+appears only if that read settles with the prompt still last, or fails. Two
+more reads, at 10 and 30 seconds, keep running under the visible notice so a
+late reply still replaces it. Both buffers — session errors and rejected sends — appear in the
 status report (`buildOpenCodeStatusReport`, Ctrl/Cmd+Shift+L or
 `__opencodeDebug.statusReport()`) together with the managed OpenCode
 process's last error and stderr tail and the expected log file locations.
@@ -530,8 +583,8 @@ after this final read cannot be guarded atomically.
 both title context and Markdown export. Export keeps full text; title input
 limits individual fields and each message while retaining head/tail excerpts.
 Web, Electron, hosted mobile and Capacitor use the existing Small Model route.
-Mobile session rows expose the same action beside manual rename when swiped
-open, with four 48px action slots and a session-scoped generation spinner.
+Mobile session rows expose the same action inside the manual rename editor
+(swipe, then rename), with a session-scoped generation spinner on the row.
 VS Code has no Small Model route and exposes a disabled action with an explicit
 explanation.
 
@@ -611,7 +664,7 @@ feedback stays truthful.
 Callers whose confirmation can span a runtime switch may pass an
 `expectedRuntimeKey` captured earlier; ordinary callers are guarded by default.
 
-`unarchiveSession` clears the archive timestamp in the session's existing directory. It never moves the session, including when that directory is missing. Server failure keeps the session archived locally; confirmation updates the global cache. `unarchiveSessions` preserves partial results and stops committing when its captured runtime changes.
+`unarchiveSession` clears the archive timestamp in the session's existing directory. It never moves the session, including when that directory is missing. Server failure keeps the session archived locally; confirmation updates the global cache and reads fresh live status for an existing child store. A failed status read does not undo a confirmed restore or claim the session is idle. If the runtime switches after confirmation, the status read cannot write into the new runtime, but the confirmed restore still returns success on the captured runtime. `unarchiveSessions` preserves partial results and stops committing when its captured runtime changes.
 
 ### Deletion runtime guard
 
