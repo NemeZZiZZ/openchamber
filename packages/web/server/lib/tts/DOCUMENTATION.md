@@ -50,7 +50,7 @@ Returns boolean indicating whether OpenAI API key is configured (checks environm
 Generates speech and returns as a web stream for direct streaming to clients.
 - Options: `text` (required), `voice`, `model`, `speed`, `instructions`, `apiKey`.
 - Upstream `/v1/audio/speech` requests always carry `response_format: 'mp3'` (the documented default; strict servers such as OpenRouter reject requests without it). With a custom baseURL the request omits `instructions` because compatible servers do not universally support it.
-- Returns: `{ stream: ReadableStream, contentType: 'audio/mpeg' }`.
+- Returns: `{ stream: ReadableStream, contentType: string }` — `contentType` is the upstream response's `Content-Type` header, falling back to `'audio/mpeg'` when the server omits it.
 - Throws: Error if API key not configured or text is empty.
 
 ### `generateSpeechBuffer(options)`
@@ -77,7 +77,7 @@ Returns sanitized string with markdown, URLs, file paths, and special characters
 ### `generateSpeechStream`
 Returns object with:
 - `stream`: ReadableStream of MP3 audio data.
-- `contentType`: Always 'audio/mpeg'.
+- `contentType`: the upstream response's `Content-Type` header, falling back to `'audio/mpeg'` when the server omits it.
 
 ### `generateSpeechBuffer`
 Returns Buffer containing MP3 audio data.
