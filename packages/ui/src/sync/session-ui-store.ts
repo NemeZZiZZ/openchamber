@@ -300,8 +300,9 @@ export async function routeMessage(params: {
     content: params.content,
     directory: requestDirectory,
     files: sendFiles,
+    context: contextItems,
     appendSubmissions: params.appendSubmissions,
-    send: (messageID) => opencodeClient.sendMessage({
+    send: (messageID, context) => opencodeClient.sendMessage({
       runtimeKey: params.runtimeKey,
       id: params.sessionId,
       providerID: params.providerID,
@@ -310,7 +311,7 @@ export async function routeMessage(params: {
       text: params.content,
       agentMentions: params.agentMentionName ? [{ name: params.agentMentionName }] : undefined,
       files: sendFiles,
-      context: contextItems.length > 0 ? contextItems : undefined,
+      context: context.length > 0 ? context : undefined,
       delivery: params.delivery,
       messageId: messageID,
       directory: requestDirectory,
@@ -399,8 +400,6 @@ export type NewSessionDraftState = {
   projectContextPins?: { notes: string[]; plans: string[] }
   target: NewSessionDraftTarget
   preparedChatDirectory?: string | null
-  /** Opened as a programmatic fallback (no session active at boot), not by the user. */
-  openedAutomatically?: boolean
 }
 
 export type ViewportAnchor = {
@@ -1438,7 +1437,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       syntheticParts: options?.syntheticParts,
       targetFolderId: options?.targetFolderId,
       projectContextPins: options?.projectContextPins,
-      openedAutomatically: options?.automatic === true,
     }
 
     set({

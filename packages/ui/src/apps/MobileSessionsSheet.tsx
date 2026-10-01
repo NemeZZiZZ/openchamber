@@ -1,5 +1,5 @@
 import React from 'react';
-import { useSessionTurnActive } from '@/sync/global-session-status';
+import { useSessionTurnActivity } from '@/sync/global-session-status';
 import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import { createPortal } from 'react-dom';
 import {
@@ -114,6 +114,8 @@ import { useCollapsedSessionActivityState } from '@/components/session/sidebar/s
 import type { SessionNode } from '@/components/session/sidebar/types';
 import { buildMultiRunIndex, type MultiRunSummary } from '@/lib/multirun/runs';
 import { MobileRunProviderLogos } from './MobileRunProviderLogos';
+import { MobileSessionGoalGlyph, MobileSessionPendingBadges } from './MobileSessionStateBadges';
+import { usePendingRequestCounts } from './usePendingRequestCounts';
 
 type MobileSessionsSheetProps = {
   open: boolean;
@@ -128,6 +130,7 @@ type MobileSessionsSheetProps = {
     instanceLabel: string | null;
     onOpenInstances?: () => void;
     onOpenSettings: () => void;
+    onOpenScheduled: () => void;
     onOpenUsage: () => void;
     /** Present only while a server update is available (hosted web). */
     onOpenUpdate?: () => void;
@@ -315,6 +318,9 @@ const SessionRow: React.FC<{
   work?: MobileSessionWorkAction;
   /** Pin / Unpin in the swipe actions, and the pin marker; top-level rows. */
   pin?: MobileSessionPinAction;
+  /** Subsessions of the row; while they are hidden, their waiting requests
+      count on this row. Absent: only the row's own requests count. */
+  descendantIdsOf?: (sessionId: string) => readonly string[];
 }> = ({
   session,
   active,
@@ -337,6 +343,7 @@ const SessionRow: React.FC<{
   onCancelRename,
   work,
   pin,
+  descendantIdsOf,
 }) => {
   const { t } = useI18n();
   const time = formatRelativeShort(getSessionTimestamp(session));
@@ -346,12 +353,20 @@ const SessionRow: React.FC<{
   // Live indicators, same conventions as the desktop sidebar: busy/retry →
   // spinner; unseen activity on a non-active row → attention dot.
   const unseenCount = useSessionUnseenCount(session.id);
-  const isStreaming = useSessionTurnActive(session.id);
+  const turnActivity = useSessionTurnActivity(session.id);
+  const isStreaming = turnActivity !== null;
   const showUnreadDot = !isStreaming && unseenCount > 0 && !active;
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);
   const showActivityDuration = (isStreaming || showUnreadDot) && hasActivityDuration;
   // Jev thinks this work looks finished: the same quiet check the sidebar shows.
   const showDoneHint = Boolean(work?.inWork) && !isStreaming && isDoneSuggested(session);
+  // A collapsed row stands for its hidden subsessions too; an expanded one
+  // leaves their requests to their own rows.
+  const familyIds = React.useMemo(
+    () => (descendantIdsOf && !(hasChildren && expanded) ? [session.id, ...descendantIdsOf(session.id)] : [session.id]),
+    [descendantIdsOf, expanded, hasChildren, session.id],
+  );
+  const pendingRequests = usePendingRequestCounts(familyIds);
 
   const rowContent = (
     <>
@@ -378,8 +393,7 @@ const SessionRow: React.FC<{
             <Icon name="loader-4" className="size-3 animate-spin text-primary" aria-label={t('sessions.aiRename.generating')} />
           ) : isStreaming || showUnreadDot ? (
             <SessionActivityIndicator
-              state={isStreaming ? 'running' : 'unread'}
-              label={isStreaming ? t('sessions.sidebar.session.status.active') : t('sessions.sidebar.session.status.unread')}
+              state={turnActivity ?? 'unread'}
             />
           ) : (
             <RiArrowDownSLine className={cn('size-[18px] transition-transform duration-150', expanded ? 'rotate-0' : '-rotate-90')} />
@@ -433,13 +447,16 @@ const SessionRow: React.FC<{
               aiRename.pending
                 ? <Icon name="loader-4" className="size-3 shrink-0 animate-spin text-primary" aria-label={t('sessions.aiRename.generating')} />
                 : <SessionActivityIndicator
-                    state={isStreaming ? 'running' : 'unread'}
-                    label={isStreaming ? t('sessions.sidebar.session.status.active') : t('sessions.sidebar.session.status.unread')}
+                    state={turnActivity ?? 'unread'}
                   />
             ) : null}
             {showDoneHint ? (
               <Icon name="check" className="size-3.5 shrink-0 text-muted-foreground" aria-label={t('sessions.sidebar.session.work.doneSuggested')} />
             ) : null}
+            {/* Goal and waiting requests sit before the time, so the time
+                column stays aligned from row to row. */}
+            <MobileSessionGoalGlyph session={session} />
+            <MobileSessionPendingBadges {...pendingRequests} />
             {/* The elapsed turn takes the time slot while it matters, then
                 hands it back to the relative timestamp. */}
             {showActivityDuration ? (
@@ -960,6 +977,10 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     }
     return children;
   }, [sessions]);
+  const descendantIdsOf = React.useCallback(
+    (sessionId: string) => getDescendantIds(childrenBySessionId, sessionId),
+    [childrenBySessionId],
+  );
 
   // Managed Chats (sessions under ~/.config/openchamber/chats) are not owned
   // by any registered project; they get their own section above the project
@@ -1340,6 +1361,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
             onCancelRename={() => setRenamingSessionId(null)}
             work={workActionFor(session)}
             pin={pinActionFor(session)}
+            descendantIdsOf={descendantIdsOf}
           />
           {hasChildren && expanded
             ? children.map((child) => renderNode(child, rowIndent + CHILD_INDENT_STEP))
@@ -1679,6 +1701,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     onToggleWork: sessionWorkEnabled ? (session, inWork) => { void handleToggleWork(session, inWork); } : undefined,
     isPinned,
     onTogglePin: handleTogglePin,
+    descendantIdsOf,
   };
 
   const hasNoMatches =
@@ -2184,11 +2207,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                                 return (
                                   <div key={bucket.key}>
                                     <MobileSwipeActionsRow
-                                      // A space's swipe action is its grant dialog, where a worktree's is its deletion.
-                                      actionsWidth={48}
+                                      // A space's swipe actions are its grant dialog and its actions sheet, where a worktree's is its deletion.
+                                      actionsWidth={bucket.space ? 96 : 48}
                                       revealed={revealedRowId === `wt:${bucket.key}`}
                                       onRevealedChange={(nextRevealed) => handleRowKeyRevealedChange(`wt:${bucket.key}`, nextRevealed)}
                                       actions={bucket.space ? (
+                                        <>
                                         <button
                                           type="button"
                                           tabIndex={revealedRowId === `wt:${bucket.key}` ? 0 : -1}
@@ -2202,6 +2226,20 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                                         >
                                           <Icon name="key" className="size-[18px]" />
                                         </button>
+                                        <button
+                                          type="button"
+                                          tabIndex={revealedRowId === `wt:${bucket.key}` ? 0 : -1}
+                                          className="flex flex-1 items-center justify-center text-foreground transition-colors active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                                          aria-label={t('spaces.actions.menuAria', { label: bucket.label })}
+                                          onClick={() => {
+                                            setRevealedRowId(null);
+                                            if (bucket.space) useSpacesStore.getState().openActionsSheet(bucket.space.id);
+                                          }}
+                                          style={{ touchAction: 'manipulation' }}
+                                        >
+                                          <Icon name="more-2" className="size-[18px]" />
+                                        </button>
+                                        </>
                                       ) : bucket.worktree ? (
                                         <button
                                           type="button"
@@ -2324,6 +2362,18 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                   <span className="absolute right-2 top-2 inline-flex size-2 rounded-full bg-primary" aria-hidden />
                 </Button>
               ) : null}
+              <Button
+                type="button"
+                variant="default"
+                size="lg"
+                className="w-10 px-0"
+                onClick={footer.onOpenScheduled}
+                aria-label={t('sessions.sidebar.header.actions.scheduledTasks')}
+                title={t('sessions.sidebar.header.actions.scheduledTasks')}
+                style={{ touchAction: 'manipulation' }}
+              >
+                <Icon name="calendar-schedule" className="size-5" />
+              </Button>
               <Button
                 type="button"
                 variant="default"

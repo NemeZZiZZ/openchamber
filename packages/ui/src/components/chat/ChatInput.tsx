@@ -501,7 +501,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     );
     const newSessionDraft = useSessionUIStore((s) => s.newSessionDraft);
     const newSessionDraftOpen = Boolean(newSessionDraft?.open);
-    const newSessionDraftAnnouncesDirtyState = newSessionDraftOpen && newSessionDraft?.openedAutomatically !== true;
     const draftPermissionMode = useSessionUIStore((s) => (
         s.newSessionDraft?.open ? s.newSessionDraft.permissionMode : undefined
     ));
@@ -3817,7 +3816,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             selectedBranchLabel={selectedDraftBranchLabel}
                             selectedBranchIsKnown={selectedDraftBranchIsKnown}
                             hasUncommittedChanges={selectedDraftDirectoryHasUncommittedChanges}
-                            announceDirtyState={newSessionDraftAnnouncesDirtyState}
                             projectRootBranchOption={projectRootBranchOption}
                             worktreeBranchOptions={worktreeBranchOptions}
                             branchItems={draftBranchItems}
@@ -3925,12 +3923,23 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         onAgentSelect={handleAgentSelect}
                         onClose={closeAutocomplete}
                     />
+                {/* The lift shadow lives on this wrapper, away from the glass
+                    box's backdrop-filter: on the same element Chromium grows
+                    the glass layer by the shadow's blur, and that band painted
+                    a flat grey strip over the bottom of the goal row above. */}
+                <div
+                    className={cn(
+                        'flex flex-col',
+                        isComposerExpanded && 'flex-1 min-h-0',
+                        'shadow-[0_4px_16px_-4px_rgb(0_0_0_/_0.12)]',
+                    )}
+                    style={{ borderRadius: chatInputRadius }}
+                >
                 <div
                     className={cn(
                         "flex flex-col relative overflow-visible",
                         isComposerExpanded && 'flex-1 min-h-0',
                         "border border-border/80 focus-within:border-interactive-selection-foreground/35",
-                        "shadow-[0_4px_16px_-4px_rgb(0_0_0_/_0.12)]",
                         // The box floats over the transcript, so it is glass.
                         'oc-glass-composer',
                         isDragging && "ring-2 ring-primary ring-offset-2"
@@ -4110,6 +4119,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     {mobileModelAgentRow}
                     </div>
 
+                </div>
                 </div>
                 </div>
                 </>
@@ -4334,7 +4344,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 selectedBranchLabel={selectedDraftBranchLabel}
                 selectedBranchIsKnown={selectedDraftBranchIsKnown}
                 hasUncommittedChanges={selectedDraftDirectoryHasUncommittedChanges}
-                            announceDirtyState={newSessionDraftAnnouncesDirtyState}
                 projectRootBranchOption={projectRootBranchOption}
                 worktreeBranchOptions={worktreeBranchOptions}
                 branchItems={draftBranchItems}

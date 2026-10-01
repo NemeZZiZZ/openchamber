@@ -27,10 +27,11 @@ import {
   requireSpaceId,
   spaceResourceName,
 } from '../labels.js';
-import { SPACE_CONNECT_COMMAND, SPACE_USER, TOOLS_MOUNT_PATH } from '../layout.js';
+import { SPACE_CONNECT_COMMAND, SPACE_IDLE_EXIT_CODE, SPACE_USER, TOOLS_MOUNT_PATH } from '../layout.js';
 import { openCommandStream as openCommandStreamProcess } from '../run-command.js';
 import { createSpaceServerChannel, createSpaceToken } from '../space-server.js';
 import { CHANGE_TIMEOUT_MS, ROLLBACK_SETTLE_MS, createDockerEngine, entryLabels, entryName, isInterrupted, pause } from './docker-engine.js';
+import { createDockerDisk } from './docker-disk.js';
 import { createDockerTools } from './docker-tools.js';
 
 const DOCKER_PLACE_ID = 'docker';
@@ -60,12 +61,13 @@ function execRole(target) {
   throw new SpaceError('invalid_exec_target', `A command runs in the space or in its gatekeeper, not in '${target}'`);
 }
 
-export function createDockerPlace({ runCommand, openCommandStream = openCommandStreamProcess, dockerPath, owner, toolsSource, wait = pause, now = () => new Date() }) {
+export function createDockerPlace({ runCommand, openCommandStream = openCommandStreamProcess, dockerPath, colimaPath = null, owner, toolsSource, wait = pause, now = () => new Date() }) {
   requireOwner(owner);
 
   const engine = createDockerEngine({ runCommand, dockerPath });
   const { run, docker, inspect, removeOne, removeStoppedContainer } = engine;
   const tools = createDockerTools({ engine, owner, toolsSource, image: SPACE_BASE_IMAGE, now, wait });
+  const disk = createDockerDisk({ engine, runCommand, colimaPath, owner, image: SPACE_BASE_IMAGE, tools });
 
   /** Every resource that carries our marker and this owner, optionally for one space. Found by label only. */
   const findResources = async (spaceId) => {
@@ -236,11 +238,18 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
   /**
    * Runs argv as the space user in the space or, with `target: 'gatekeeper'`, in its gatekeeper.
    * It does not look at the container first, so it also serves containers this place just made.
+   * `maxOutputBytes`, `keepTail` and `killTree` go to `runCommand` as they are; the setup
+   * commands use them for a long command whose output is shown and whose exit code is the answer.
    */
   const execInContainer = (spaceId, argv, options = {}) => run(
     ['exec', '--interactive', '--user', SPACE_USER, spaceResourceName(spaceId, execRole(options.target)), ...argv],
     options.timeoutMs ?? EXEC_TIMEOUT_MS,
-    { stdin: options.stdin ?? '' },
+    {
+      stdin: options.stdin ?? '',
+      ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
+      ...(options.keepTail === true ? { keepTail: true } : {}),
+      ...(options.killTree === true ? { killTree: true } : {}),
+    },
   );
 
   const server = createSpaceServerChannel({ exec: execInContainer, wait, now: () => now().getTime() });
@@ -384,7 +393,11 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
       if (space && (!guard || (state === 'running' && guard.entry.State?.Running !== true))) {
         missing.push(spaceResourceName(id, ROLE_GATEKEEPER));
       }
-      return { id, name, project, created, state, orphans, damaged: missing.length > 0, missing };
+      // Since 5d-3: a space that stopped itself for the idle stop, told by its exit code, and whether
+      // its gatekeeper still runs, which the host stops when it finds one beside a stopped space.
+      const stoppedIdle = state === 'exited' && space.entry.State?.ExitCode === SPACE_IDLE_EXIT_CODE;
+      const gatekeeperRunning = guard?.entry.State?.Running === true;
+      return { id, name, project, created, state, stoppedIdle, gatekeeperRunning, orphans, damaged: missing.length > 0, missing };
     });
   };
 
@@ -400,7 +413,7 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
     const entry = await inspectOwnContainer(spaceId, spaceResourceName(spaceId, ROLE_GATEKEEPER));
     const address = String(entry?.NetworkSettings?.Networks?.[spaceResourceName(spaceId, ROLE_NETWORK)]?.IPAddress ?? '');
     if (net.isIP(address) === 0) {
-      throw new SpaceError('gatekeeper_address_unknown', `The runtime reports no address for the gatekeeper of space ${spaceId} on the space's network, so its listeners cannot be bound.`);
+      throw new SpaceError('gatekeeper_address_unknown', `The runtime reports no address for the network filter of space ${spaceId} on the space's network, so its listeners cannot be bound.`);
     }
     return address;
   };
@@ -611,5 +624,5 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
     return starting.get(spaceId);
   };
 
-  return { id: DOCKER_PLACE_ID, check, create, list, exec, execArgv, connect, stop, start, remove, verify };
+  return { id: DOCKER_PLACE_ID, check, create, list, exec, execArgv, connect, stop, start, remove, verify, readDisk: disk.read, cleanUpDisk: disk.cleanUp };
 }

@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 
 import { isAgentMemoryFeatureAvailable } from '../agent-memory/feature-flag.js';
 import { isPermissionMode } from '../permission-auto-accept/modes.js';
+import { idleStopSchema } from '../spaces/idle-stop.js';
 
 // Generated from packages/ui/src/lib/settings/registry.ts by
 // `bun run settings-registry:generate`; `registry.test.ts` fails when stale.
@@ -288,6 +289,12 @@ export const createSettingsHelpers = (dependencies) => {
     if (isPermissionMode(candidate.permissionDefaultMode)) {
       result.permissionDefaultMode = candidate.permissionDefaultMode;
     }
+    if (typeof candidate.messageSearchEnabled === 'boolean') {
+      result.messageSearchEnabled = candidate.messageSearchEnabled;
+    }
+    if (typeof candidate.messageSearchReasoningEnabled === 'boolean') {
+      result.messageSearchReasoningEnabled = candidate.messageSearchReasoningEnabled;
+    }
     if (typeof candidate.desktopUiPassword === 'string') {
       result.desktopUiPassword = candidate.desktopUiPassword.trim();
     }
@@ -426,6 +433,9 @@ export const createSettingsHelpers = (dependencies) => {
     }
     if (typeof candidate.sessionGoalEnabled === 'boolean') {
       result.sessionGoalEnabled = candidate.sessionGoalEnabled;
+    }
+    if (candidate.sessionGoalChecker === 'classifier' || candidate.sessionGoalChecker === 'small-model') {
+      result.sessionGoalChecker = candidate.sessionGoalChecker;
     }
     if (typeof candidate.sessionGoalDefaultBudgetEnabled === 'boolean') {
       result.sessionGoalDefaultBudgetEnabled = candidate.sessionGoalDefaultBudgetEnabled;
@@ -626,8 +636,14 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.agentNotifyToolEnabled === 'boolean') {
       result.agentNotifyToolEnabled = candidate.agentNotifyToolEnabled;
     }
+    if (typeof candidate.agentToolsCodeMode === 'boolean') {
+      result.agentToolsCodeMode = candidate.agentToolsCodeMode;
+    }
     if (typeof candidate.isolatedSpacesEnabled === 'boolean') {
       result.isolatedSpacesEnabled = candidate.isolatedSpacesEnabled;
+    }
+    if (idleStopSchema.safeParse(candidate.isolatedSpacesIdleStop).success) {
+      result.isolatedSpacesIdleStop = { ...candidate.isolatedSpacesIdleStop };
     }
     if (typeof candidate.openCodeUpdateToastDismissedVersion === 'string') {
       const version = candidate.openCodeUpdateToastDismissedVersion.trim();
@@ -1050,7 +1066,8 @@ export const createSettingsHelpers = (dependencies) => {
             desktopLanAccessActive: process.env.OPENCHAMBER_DESKTOP_LAN_ACCESS_ACTIVE === 'true',
             desktopLanAccessBlockedReason:
               process.env.OPENCHAMBER_DESKTOP_LAN_ACCESS_BLOCKED_REASON === 'missing-password'
-                ? 'missing-password'
+                || process.env.OPENCHAMBER_DESKTOP_LAN_ACCESS_BLOCKED_REASON === 'enterprise-mode'
+                ? process.env.OPENCHAMBER_DESKTOP_LAN_ACCESS_BLOCKED_REASON
                 : null,
           }
         : {}),

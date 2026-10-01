@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test"
+import { z } from "zod"
 
 // The generated `@opencode/client` runs for real here; only the runtime
 // transport (`runtimeFetch`) and runtime identity are replaced. That keeps
@@ -280,6 +281,21 @@ describe("sendMessage", () => {
       agents: [{ name: "explore", mention: { start: 0, end: 8, text: "@explore" } }],
     })
     expect(requests.every((r) => r.headers.get("x-opencode-directory") === encodeURIComponent("/repo/app"))).toBe(true)
+  })
+
+  test("context ids travel with the synthetic messages and sort below the prompt id", async () => {
+    responses.push(json({ id: "a" }), json({ id: "b" }), json({ id: "c" }))
+    const id = await opencodeClient.sendMessage({
+      id: "ses_1",
+      providerID: "openai",
+      text: "",
+      context: [{ id: "msg_given", text: "first" }, { text: "second" }],
+    })
+    const [first, second] = requests.slice(0, 2).map((request) => request.body)
+    expect(first).toMatchObject({ id: "msg_given", text: "first" })
+    expect(second).toMatchObject({ text: "second" })
+    const mintedID = z.object({ id: z.string().startsWith("msg_") }).parse(second).id
+    expect(mintedID < id).toBe(true)
   })
 
   test("without a selection change only the prompt is sent, with files as URIs", async () => {
@@ -589,6 +605,27 @@ describe("messages and config", () => {
     expect(catalog.providers).toEqual([{ id: "openai", name: "OpenAI" }])
     expect(catalog.models).toHaveLength(1)
     expect(catalog.default).toEqual({ id: "x", providerID: "openai" })
+  })
+
+  test("a fresh provider read waits out the one in flight and reads again", async () => {
+    const answer = (request: CapturedRequest) =>
+      request.url.pathname === "/api/provider"
+        ? json({ location: {}, data: [{ id: "openai", name: "OpenAI" }] })
+        : request.url.pathname === "/api/model"
+          ? json({ location: {}, data: [{ id: "openai/x", modelID: "x", providerID: "openai" }] })
+          : json({ location: {}, data: { id: "openai/x", modelID: "x", providerID: "openai" } })
+    responses.push(answer, answer, answer, answer, answer, answer)
+    const before = requests.length
+
+    const first = opencodeClient.getProvidersForConfig("/repo/app")
+    const joined = opencodeClient.getProvidersForConfig("/repo/app")
+    const fresh = opencodeClient.getProvidersForConfig("/repo/app", { fresh: true })
+    const [firstCatalog, joinedCatalog, freshCatalog] = await Promise.all([first, joined, fresh])
+
+    // One catalog read is three requests: the joined call adds none, the fresh one three more.
+    expect(requests.length - before).toBe(6)
+    expect(joinedCatalog).toBe(firstCatalog)
+    expect(freshCatalog).not.toBe(firstCatalog)
   })
 })
 

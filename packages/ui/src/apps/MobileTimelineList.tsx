@@ -1,5 +1,5 @@
 import React from 'react';
-import { useSessionTurnActive } from '@/sync/global-session-status';
+import { useSessionTurnActivity } from '@/sync/global-session-status';
 import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import type { Session } from '@/lib/opencode/model';
 
@@ -23,6 +23,9 @@ import type { MultiRunSummary } from '@/lib/multirun/runs';
 import { useUIStore } from '@/stores/useUIStore';
 import { formatRelativeShort, getSessionTimestamp } from './mobileSessionFields';
 import { MobileRunProviderLogos } from './MobileRunProviderLogos';
+import { MobileSessionGoalGlyph, MobileSessionPendingBadges } from './MobileSessionStateBadges';
+import { usePendingRequestCounts } from './usePendingRequestCounts';
+import { getSessionGoal } from '@/lib/sessionGoalMetadata';
 
 export type TimelineProject = MobileProjectIconProject & { label: string };
 
@@ -59,6 +62,8 @@ export type TimelineRowHandlers = {
   onToggleWork?: (session: Session, inWork: boolean) => void;
   isPinned: (session: Session) => boolean;
   onTogglePin: (session: Session) => void;
+  /** Subsessions of a row, for the requests they are waiting on. */
+  descendantIdsOf: (sessionId: string) => readonly string[];
 };
 
 const TIMELINE_ROW_INDENT = 12;
@@ -132,9 +137,10 @@ const MobileTimelineRow: React.FC<{
   const aiRename = useSessionAiRenameAction(session.id, session.directory, revealed || renaming);
 
   // Live indicators, same conventions as the grouped rows: busy/retry →
-  // info dot; unseen activity on a non-active row → success dot.
+  // running-kind icon; unseen activity on a non-active row → unread icon.
   const unseenCount = useSessionUnseenCount(session.id);
-  const isStreaming = useSessionTurnActive(session.id);
+  const turnActivity = useSessionTurnActivity(session.id);
+  const isStreaming = turnActivity !== null;
   const showUnreadDot = !isStreaming && unseenCount > 0 && !active;
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);
   const showActivityDuration = (isStreaming || showUnreadDot) && hasActivityDuration;
@@ -143,6 +149,12 @@ const MobileTimelineRow: React.FC<{
   const work = onToggleWork ? { inWork, onToggle: () => onToggleWork(session, inWork) } : undefined;
   const pinned = handlers.isPinned(session);
   const pin = { pinned, onToggle: () => handlers.onTogglePin(session) };
+  // Timeline rows never expand, so their subsessions' requests count here.
+  const { descendantIdsOf } = handlers;
+  const familyIds = React.useMemo(() => [session.id, ...descendantIdsOf(session.id)], [descendantIdsOf, session.id]);
+  const pendingRequests = usePendingRequestCounts(familyIds);
+  const hasPendingRequests = pendingRequests.permissionCount > 0 || pendingRequests.formCount > 0;
+  const hasGoal = getSessionGoal(session) !== null;
 
   return (
     <MobileSwipeActionsRow
@@ -186,8 +198,7 @@ const MobileTimelineRow: React.FC<{
                 <Icon name="loader-4" className="size-3 shrink-0 animate-spin text-primary" aria-label={t('sessions.aiRename.generating')} />
               ) : isStreaming || showUnreadDot ? (
                 <SessionActivityIndicator
-                  state={isStreaming ? 'running' : 'unread'}
-                  label={isStreaming ? t('sessions.sidebar.session.status.active') : t('sessions.sidebar.session.status.unread')}
+                  state={turnActivity ?? 'unread'}
                 />
               ) : null}
               {showActivityDuration ? (
@@ -213,10 +224,20 @@ const MobileTimelineRow: React.FC<{
                 {title}
               </span>
             )}
-            {branch ? (
+            {branch || hasGoal || hasPendingRequests ? (
+              // Branch on the left; goal and waiting requests close the line,
+              // the same state cluster the desktop timeline row ends with.
               <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                <Icon name="git-branch" className="size-3.5 shrink-0" />
-                <span className="block min-w-0 truncate typography-micro">{branch}</span>
+                {branch ? (
+                  <>
+                    <Icon name="git-branch" className="size-3.5 shrink-0" />
+                    <span className="block min-w-0 truncate typography-micro">{branch}</span>
+                  </>
+                ) : null}
+                <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                  <MobileSessionGoalGlyph session={session} />
+                  <MobileSessionPendingBadges {...pendingRequests} />
+                </span>
               </span>
             ) : null}
           </>

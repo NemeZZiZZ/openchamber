@@ -1,4 +1,4 @@
-import { readAuthFile } from '../../opencode/auth.js';
+import { readOpenCodeCredentials } from '../../opencode/auth.js';
 import {
   getAuthEntry,
   normalizeAuthEntry,
@@ -93,8 +93,7 @@ const attachZaiGiftResets = async (windows, apiKey) => {
   }
 };
 
-export const isConfigured = () => {
-  const auth = readAuthFile();
+export const isConfigured = (auth) => {
   const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
   return Boolean(entry?.key || entry?.token);
 };
@@ -103,7 +102,7 @@ const ZAI_GIFT_RESET_USE_URL = 'https://api.z.ai/api/biz/customer-package-reset/
 export const giftResetTypes = ['FIVE_HOUR', 'WEEK'];
 
 export const useZaiGiftReset = async ({ recordId, resetType }) => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
   const apiKey = entry?.key ?? entry?.token;
 
@@ -136,7 +135,7 @@ export const useZaiGiftReset = async ({ recordId, resetType }) => {
 };
 
 export const fetchQuota = async () => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
   const apiKey = entry?.key ?? entry?.token;
 
