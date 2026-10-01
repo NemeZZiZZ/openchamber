@@ -48,6 +48,33 @@ describe('OpenAI audio SDK compatibility', () => {
     expect(result).toEqual({ buffer: audio, contentType: 'audio/mpeg' });
   });
 
+  it('passes the upstream content type through to the caller', async () => {
+    const audio = Buffer.from('wav-response');
+    const baseURL = await listen(async (request, response) => {
+      response.writeHead(200, { 'Content-Type': 'audio/wav' });
+      response.end(audio);
+    });
+
+    const result = await new TTSService().generateSpeechStream({
+      text: 'Hello', model: 'custom-tts', voice: 'coral', speed: 1, baseURL,
+    });
+
+    expect(result).toEqual({ buffer: audio, contentType: 'audio/wav' });
+  });
+
+  it('falls back to audio/mpeg when the server omits the content type', async () => {
+    const audio = Buffer.from('unlabelled-response');
+    const baseURL = await listen(async (request, response) => {
+      response.end(audio);
+    });
+
+    const result = await new TTSService().generateSpeechStream({
+      text: 'Hello', model: 'custom-tts', voice: 'coral', speed: 1, baseURL,
+    });
+
+    expect(result).toEqual({ buffer: audio, contentType: 'audio/mpeg' });
+  });
+
   it('uploads transcription audio as multipart data and reads the text', async () => {
     const audio = Buffer.from('transcription-input');
     let received;

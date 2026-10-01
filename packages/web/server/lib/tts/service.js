@@ -131,9 +131,13 @@ class TTSService {
       const response = await client.audio.speech.create(speechParams);
 
       const arrayBuffer = await response.arrayBuffer();
+      // Servers that ignore `response_format` may still label the bytes
+      // correctly (or return an unexpected type); pass the upstream label
+      // through and only fall back to mp3 when the server omits the header.
+      const contentType = response.headers.get('content-type') ?? 'audio/mpeg';
       return {
         buffer: Buffer.from(arrayBuffer),
-        contentType: 'audio/mpeg',
+        contentType,
       };
     } catch (error) {
       console.error('[TTSService] Error generating speech:', error);
