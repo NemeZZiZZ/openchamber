@@ -138,6 +138,10 @@ fast, so such a value means the measured window is broken: a tool that runs
 for nearly the whole step leaves a residual of a millisecond, and a text
 interval can be equally short. The row is omitted rather than shown wrong.
 
+Elapsed time is wall-clock time from the first user message in the turn through
+the final assistant completion. It includes model waits, tool execution,
+compaction, and other gaps; it is not used as a throughput denominator.
+
 Metric labels stay short. Every row is a single hover and keyboard-focus target
 for a shared tooltip, with a 750ms hover delay and a portal outside the panel's
 scroller. Tooltips explain the measurement in every locale. The token row uses
@@ -422,10 +426,13 @@ something other than "tools available".
 
 ### Linked issues and pull requests
 
-Written by the flows that already attach a thread — the composer's issue/PR
-pickers, and session creation from an issue or PR in `NewWorktreeDialog` and
-`GitHubIssuePickerDialog`. There is no manual "link this" control: attaching a
-thread to the work *is* the act of linking it.
+Written by the flows that already attach a thread — sending a message with
+issues, PRs or guest items attached in the composer, and session creation from
+an issue or PR in `NewWorktreeDialog`. There is no manual "link this" control:
+attaching a thread to the work *is* the act of linking it. A message's
+references are written in one metadata patch (`sessionActions.addLinkedIssues`):
+each write replaces the whole list, so one write per item would keep only the
+last.
 
 Stored in session metadata as a **snapshot** (`lib/linkedIssues.ts`, namespace
 `openchamber.linked_issues`), riding the same `patchSessionMetadata` channel as
