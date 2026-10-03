@@ -54,8 +54,6 @@ export const UsageGiftResetButton: React.FC<{
   if (!giftReset || !resetType) return null;
 
   const urgent = giftReset.expireAt - Date.now() < GIFT_RESET_URGENT_MS;
-  // A fresh limit needs no reset: while 95% or more of the window remains,
-  // the button stays disabled. Rounded to match the percent label the user sees.
   const remaining =
     window.remainingPercent ??
     (window.usedPercent != null ? 100 - window.usedPercent : null);
